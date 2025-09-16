@@ -71,7 +71,7 @@ jobs:
 
       # 🔹 Save the IPA as an artifact (optional)
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Rentpedia-iOS
           path: build/ios/ipa
