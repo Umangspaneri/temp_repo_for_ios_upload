@@ -13,10 +13,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0' # your Flutter version
+          flutter-version: '3.27.0'   # or the latest stable supporting Dart >= 3.5.4
+          channel: 'stable'
+
 
       - name: Install dependencies
         run: |
@@ -27,9 +29,6 @@ jobs:
           cd ios
           pod install --repo-update
           cd ..
-
-
-
 
       # 🔹 Decode & install provisioning profile
       - name: Install provisioning profile
