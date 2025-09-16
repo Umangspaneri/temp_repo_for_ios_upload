@@ -1,0 +1,51 @@
+name: eqb_ltd
+description: "A new Flutter project."
+
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.4
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  loading_animation_widget: ^1.3.0
+  webview_flutter: ^4.10.0
+  curved_labeled_navigation_bar: ^2.0.5
+  http: ^1.2.2
+  shared_preferences: ^2.3.3
+  builders: ^2.0.0
+  url_launcher: ^6.3.1
+  fluttertoast: ^8.2.4
+  connectivity_plus: ^7.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.14.4
+  flutter_lints: ^6.0.0
+
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "images/icon.png"
+  flutter_lints: ^6.0.0
+  adaptive_icon_background: "#00000000"  # Transparent background
+  adaptive_icon_foreground: "images/icon.png"
+
+
+
+
+flutter:
+  uses-material-design: true
+  assets:
+    - images/
+    - images/logo_transparent.png
+#    - images/icon.jpg
+#    - images/logo.jpg
+#    - images/logo_transparent.png
+#    - images/logo_transparent1.png

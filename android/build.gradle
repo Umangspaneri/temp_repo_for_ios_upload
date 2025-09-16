@@ -1,0 +1,52 @@
+//allprojects {
+//    repositories {
+//        google()
+//        mavenCentral()
+//    }
+//}
+//
+//rootProject.buildDir = "../build"
+//subprojects {
+//    project.buildDir = "${rootProject.buildDir}/${project.name}"
+//}
+//subprojects {
+//    project.evaluationDependsOn(":app")
+//}
+//
+//tasks.register("clean", Delete) {
+//    delete rootProject.buildDir
+//}
+
+buildscript {
+    repositories {
+        google() // Required for Android dependencies
+        mavenCentral() // Repository for additional dependencies
+    }
+    dependencies {
+        // Update to Android Gradle Plugin 8.3.0
+        classpath 'com.android.tools.build:gradle:8.3.0'
+
+        // Add Kotlin plugin if you are using Kotlin in your Android project
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.20' // Ensure the Kotlin version matches your project
+    }
+}
+
+allprojects {
+    repositories {
+        google() // Required for Android dependencies
+        mavenCentral() // Repository for additional dependencies
+    }
+}
+
+rootProject.buildDir = "../build"
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+
+subprojects {
+//    project.evaluationDependsOn(":app")
+}
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

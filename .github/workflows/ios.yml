@@ -1,0 +1,48 @@
+name: Build iOS App
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0' # Use your Flutter version
+
+      - name: Install dependencies
+        run: |
+          flutter pub get
+          cd ios
+          pod install
+          cd ..
+
+      - name: Build iOS release
+        run: flutter build ios --release
+
+      - name: Archive .ipa
+        run: |
+          mkdir -p build/ios/ipa
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/ios/Runner.xcarchive archive
+          xcodebuild -exportArchive \
+            -archivePath build/ios/Runner.xcarchive \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -exportPath build/ios/ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Rentpedia-iOS
+          path: build/ios/ipa
