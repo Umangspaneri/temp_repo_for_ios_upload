@@ -1,4 +1,4 @@
-name: Build iOS App
+name: Build & Upload iOS App
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0' # Use your Flutter version
+          flutter-version: '3.22.0' # your Flutter version
 
       - name: Install dependencies
         run: |
@@ -25,9 +25,28 @@ jobs:
           pod install
           cd ..
 
-      - name: Build iOS release
-        run: flutter build ios --release
+      # 🔹 Decode & install provisioning profile
+      - name: Install provisioning profile
+        run: |
+          echo "$IOS_PROV_PROFILE_BASE64" | base64 --decode > profile.mobileprovision
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< $(security cms -D -i profile.mobileprovision))
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
 
+      # 🔹 Decode & import certificate
+      - name: Install signing certificate
+        run: |
+          echo "$IOS_CERT_P12_BASE64" | base64 --decode > cert.p12
+          security create-keychain -p "" build.keychain
+          security import cert.p12 -k ~/Library/Keychains/build.keychain -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychain -d user -s ~/Library/Keychains/build.keychain
+          security unlock-keychain -p "" ~/Library/Keychains/build.keychain
+
+      # 🔹 Build Flutter iOS release (creates Runner.xcworkspace)
+      - name: Build iOS release
+        run: flutter build ios --release --no-codesign
+
+      # 🔹 Archive IPA using xcodebuild
       - name: Archive .ipa
         run: |
           mkdir -p build/ios/ipa
@@ -41,6 +60,16 @@ jobs:
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa
 
+      # 🔹 Upload to TestFlight (fastlane deliver)
+      - name: Upload to TestFlight
+        run: |
+          xcrun altool --upload-app \
+            -f build/ios/ipa/Runner.ipa \
+            -t ios \
+            -u "$APPLE_ID" \
+            -p "$APP_SPECIFIC_PASSWORD"
+
+      # 🔹 Save the IPA as an artifact (optional)
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
