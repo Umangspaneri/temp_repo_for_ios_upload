@@ -21,9 +21,15 @@ jobs:
       - name: Install dependencies
         run: |
           flutter pub get
+          gem install cocoapods --user-install
+          export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
+          pod repo update
           cd ios
-          pod install
+          pod install --repo-update
           cd ..
+
+
+
 
       # 🔹 Decode & install provisioning profile
       - name: Install provisioning profile
