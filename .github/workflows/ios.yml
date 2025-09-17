@@ -73,7 +73,7 @@ jobs:
           echo "::error::Failed to extract UUID."
           exit 1
         }
-
+      
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
         cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/${UUID}.mobileprovision
         echo "Provisioning profile installed successfully."
