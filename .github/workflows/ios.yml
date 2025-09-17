@@ -51,7 +51,7 @@ jobs:
       run: |
         set -euo pipefail
         printf '%s' "$PROFILE_B64" | tr -d '\r' > /tmp/profile.b64
-        base64 -d /tmp/profile.b64 > profile.mobileprovision || {
+        base64 -D /tmp/profile.b64 > profile.mobileprovision || {
           echo "::error::Failed to decode provisioning profile."
           exit 1
         }
