@@ -178,7 +178,6 @@
 #           name: eqb_ltd-iOS
 #           path: build/ios/ipa
 
-
 name: Build & Upload iOS App
 
 on:
@@ -240,14 +239,10 @@ jobs:
           security cms -D -i "$PROFILE_PATH" > profile.plist
           UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" profile.plist)
           NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" profile.plist)
-          echo "✅ Profile UUID=$UUID"
-          echo "✅ Profile Name=$NAME"
-
+          echo "✅ Installed provisioning profile as ${UUID}.mobileprovision"
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp "$PROFILE_PATH" \
              ~/Library/MobileDevice/Provisioning\ Profiles/${UUID}.mobileprovision
-          echo "✅ Installed provisioning profile as ${UUID}.mobileprovision"
-
           echo "::set-output name=prov_uuid::$UUID"
           echo "::set-output name=prov_name::$NAME"
 
@@ -264,24 +259,18 @@ jobs:
             exit 1
           fi
 
-          KEYCHAIN=build.keychain
-          security create-keychain -p "" "$KEYCHAIN-db"
-          security unlock-keychain -p "" "$KEYCHAIN-db"
+          security create-keychain -p "" build.keychain-db
+          security unlock-keychain -p "" build.keychain-db
 
           security import "$CERT_PATH" \
-            -k ~/Library/Keychains/"$KEYCHAIN-db" \
+            -k ~/Library/Keychains/build.keychain-db \
             -P "$CERT_PASS" \
             -T /usr/bin/codesign \
-            -T /usr/bin/security || {
-              echo "::error::❌ Failed to import certificate. Known issue: wrong password or corrupted .p12"
-              exit 1
-            }
+            -T /usr/bin/security
 
           security list-keychains -d user -s \
-            ~/Library/Keychains/"$KEYCHAIN-db" \
-            $(security list-keychains -d user \
-              | sed -E 's/^[[:space:]]+//g' \
-              | tr -d '"')
+            ~/Library/Keychains/build.keychain-db \
+            $(security list-keychains -d user)
           echo "✅ Certificate imported into keychain"
 
       - name: Build iOS release
@@ -291,52 +280,33 @@ jobs:
           flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log
           tail -n 200 flutter_build.log || true
 
-      - name: Archive & Export .ipa
+      - name: Archive & Export .ipa (Automatic Signing)
         shell: bash
         env:
-          DEV_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          PROV_UUID:     ${{ steps.install_prov.outputs.prov_uuid }}
-          PROV_NAME:     ${{ steps.install_prov.outputs.prov_name }}
+          DEV_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          echo "🔎 DEBUG: TEAM_ID=$DEV_TEAM_ID"
-          echo "🔎 DEBUG: PROFILE_UUID=$PROV_UUID"
-          echo "🔎 DEBUG: PROFILE_NAME=$PROV_NAME"
-          SIGN_ID=$( security find-identity -v -p codesigning \
-                      | awk -F\" '/iPhone Distribution/ {print $2; exit}' )
-          echo "🔎 DEBUG: SIGN_IDENTITY=$SIGN_ID"
 
-          echo "📦 Archiving…"
+          # pre-build skeleton
+          flutter build ios --release --no-codesign
+
+          # archive with Automatic signing
           xcodebuild \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/Runner.xcarchive \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$DEV_TEAM_ID" \
-            CODE_SIGN_IDENTITY="$SIGN_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_NAME" \
-            archive 2>&1 | tee xcodebuild.log || {
-              echo "::error::❌ Archive failed. Check xcodebuild.log for details"
-              exit 1
-            }
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$DEV_TEAM" \
+            -allowProvisioningUpdates \
+            archive
 
-          echo "📤 Exporting .ipa…"
+          # export .ipa
           xcodebuild -exportArchive \
             -archivePath build/ios/Runner.xcarchive \
             -exportOptionsPlist ios/ExportOptions.plist \
-            -exportPath build/ios/ipa \
-            2>&1 | tee xcodeexport.log || {
-              echo "::error::❌ Export failed. Validate ExportOptions.plist"
-              exit 1
-            }
-
-          echo "📁 Checking contents of build/ios/ipa:"
-          ls -lh build/ios/ipa || {
-            echo "::error::❌ Export directory missing or empty"
-            exit 1
-          }
+            -exportPath build/ios/ipa
 
       - name: Upload to TestFlight
         env:
@@ -344,17 +314,14 @@ jobs:
           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          IPA=$(ls build/ios/ipa/*.ipa 2>/dev/null | head -n1 || true)
+          IPA=$(ls build/ios/ipa/*.ipa 2>/dev/null | head -n1)
           if [ -z "$IPA" ]; then
             echo "::error::❌ No .ipa found to upload"
             exit 1
           fi
           echo "🚀 Uploading $IPA to App Store Connect via altool..."
           xcrun altool --upload-app -f "$IPA" -t ios \
-            -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" || {
-            echo "::error::❌ Upload failed"
-            exit 1
-          }
+            -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD"
           echo "✅ Upload to TestFlight succeeded"
 
       - name: Upload logs
@@ -364,12 +331,9 @@ jobs:
           path: |
             pubget.log
             flutter_build.log
-            xcodebuild.log
-            xcodeexport.log
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: eqb_ltd-iOS
           path: build/ios/ipa
-   
