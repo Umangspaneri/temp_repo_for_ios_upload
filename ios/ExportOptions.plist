@@ -16,7 +16,7 @@
     <key>com.rentpedia</key>
     <string>Rentpedia_AppStore_2025</string> <!-- ✅ Must match exact profile name -->
   </dict>
-
+   
   <key>uploadBitcode</key>
   <false/>
   <key>compileBitcode</key>
