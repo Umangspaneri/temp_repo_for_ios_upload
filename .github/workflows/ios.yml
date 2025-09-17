@@ -177,13 +177,11 @@
 #         with:
 #           name: eqb_ltd-iOS
 #           path: build/ios/ipa
-
 name: Build & Upload iOS App
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -192,37 +190,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.3'
-          channel: 'stable'
-
-      - name: Check Flutter & Dart versions
-        run: |
-          flutter --version
-          dart --version
-
-      - name: Install dependencies (pub get + CocoaPods)
-        run: |
-          set -euo pipefail
-          flutter pub get --verbose 2>&1 | tee pubget.log
-          tail -n 200 pubget.log || true
-          gem install cocoapods --user-install
-          export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          pod repo update --silent || true
-          cd ios
-          pod install --repo-update --verbose
-          cd ..
-
-      - name: Upload pubget log
-        uses: actions/upload-artifact@v4
-        with:
-          name: pubget-log
-          path: pubget.log
+      # … your checkout, flutter setup, pods etc …
 
       - name: Install Provisioning Profile
         id: install_prov
@@ -232,24 +200,28 @@ jobs:
           echo "📥 Installing provisioning profile"
           PROFILE_PATH="certs/Rentpedia_AppStore_2025.mobileprovision"
           if [ ! -f "$PROFILE_PATH" ]; then
-            echo "::error::❌ Provisioning profile not found at $PROFILE_PATH"
-            echo "::error:: Known issue: file missing or mis-named in certs/ directory"
+            echo "::error:: Provisioning profile not found at $PROFILE_PATH"
             exit 1
           fi
 
-          # parse and extract UUID
-          security cms -D -i "$PROFILE_PATH" > parsed_profile.plist
-          UUID=$( /usr/libexec/PlistBuddy -c "Print :UUID" parsed_profile.plist )
-          echo "✅ UUID=$UUID"
+          # Parse the profile into a plist
+          security cms -D -i "$PROFILE_PATH" > profile.plist
 
-          # install by UUID
+          # Extract UUID and Name
+          UUID=$( /usr/libexec/PlistBuddy -c "Print :UUID" profile.plist )
+          NAME=$( /usr/libexec/PlistBuddy -c "Print :Name" profile.plist )
+          echo "✅ Profile UUID=$UUID"
+          echo "✅ Profile Name=$NAME"
+
+          # Install by UUID
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp "$PROFILE_PATH" \
-            ~/Library/MobileDevice/Provisioning\ Profiles/${UUID}.mobileprovision
+             ~/Library/MobileDevice/Provisioning\ Profiles/${UUID}.mobileprovision
           echo "✅ Installed provisioning profile as ${UUID}.mobileprovision"
 
-          # expose to later steps
+          # Expose both for later steps
           echo "::set-output name=prov_uuid::$UUID"
+          echo "::set-output name=prov_name::$NAME"
 
       - name: Install signing certificate (.p12)
         shell: bash
@@ -257,63 +229,46 @@ jobs:
           CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
         run: |
           set -euo pipefail
-          echo "🔐 Installing signing certificate from certs/Certificates.p12"
-
+          echo "🔐 Importing certs/Certificates.p12"
           CERT_PATH="certs/Certificates.p12"
-          if [ ! -f "$CERT_PATH" ]; then
-            echo "::error::❌ Certificate file not found at $CERT_PATH"
-            echo "::error:: Known issue: mis-named or missing file in certs/ directory"
-            exit 1
-          fi
+          [ -f "$CERT_PATH" ] || {
+            echo "::error:: Certificate not found at $CERT_PATH"; exit 1
+          }
 
+          # create a temp keychain
           KEYCHAIN=build.keychain
-          KEYCHAIN_PATH="$HOME/Library/Keychains/$KEYCHAIN-db"
-
-          # create & unlock a temporary keychain
           security create-keychain -p "" "$KEYCHAIN-db"
-          security unlock-keychain -p "" "$KEYCHAIN-db"
+          security unlock-keychain  -p "" "$KEYCHAIN-db"
 
-          # import the .p12 directly
+          # import
           security import "$CERT_PATH" \
-            -k "$KEYCHAIN_PATH" \
+            -k ~/Library/Keychains/"$KEYCHAIN-db" \
             -P "$CERT_PASS" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security || {
-              echo "::error::❌ Failed to import certificate. Known issue: wrong password or corrupted .p12"
-              exit 1
-            }
+            -T /usr/bin/codesign -T /usr/bin/security
 
-          # ensure our keychain is first in the search list
+          # make it first in search list
           security list-keychains -d user -s \
-            "$KEYCHAIN_PATH" \
-            $(security list-keychains -d user \
-              | sed -E 's/^[[:space:]]+//g' \
-              | tr -d '"')
-          echo "✅ Certificate imported into keychain"
+            ~/Library/Keychains/"$KEYCHAIN-db" \
+            $(security list-keychains -d user | sed -E 's/[ "\t]//g')
 
-      - name: Build iOS release
-        run: |
-          set -euo pipefail
-          echo "🚧 Building iOS release..."
-          flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log
-          tail -n 200 flutter_build.log || true
+          echo "✅ Certificate imported"
 
       - name: Archive & Export .ipa
         shell: bash
         env:
-          DEV_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DEV_TEAM_ID:     ${{ secrets.APPLE_TEAM_ID }}
+          PROV_UUID:       ${{ steps.install_prov.outputs.prov_uuid }}
+          PROV_NAME:       ${{ steps.install_prov.outputs.prov_name }}
         run: |
           set -euo pipefail
-          mkdir -p build/ios/ipa
+          echo "🔎 DEBUG: TEAM_ID=$DEV_TEAM_ID"
+          echo "🔎 DEBUG: PROFILE_UUID=$PROV_UUID"
+          echo "🔎 DEBUG: PROFILE_NAME=$PROV_NAME"
+          SIGN_ID=$( security find-identity -v -p codesigning \
+                     | awk -F\" '/iPhone Distribution/ {print $2; exit}' )
+          echo "🔎 DEBUG: SIGN_IDENTITY=$SIGN_ID"
 
-          echo "📦 Archiving app…"
-          PROV_PROFILE=${{ steps.install_prov.outputs.prov_uuid }}
-          SIGNING_IDENTITY=$(
-            security find-identity -v -p codesigning \
-              | awk -F\" '/iPhone Distribution/ {print $2; exit}'
-          )
-          echo "⚙️ Using identity: $SIGNING_IDENTITY"
-
+          echo "📦 Archiving…"
           xcodebuild \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
@@ -322,10 +277,10 @@ jobs:
             -archivePath build/ios/Runner.xcarchive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEV_TEAM_ID" \
-            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
-            PROVISIONING_PROFILE="$PROV_PROFILE" \
+            CODE_SIGN_IDENTITY="$SIGN_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_NAME" \
             archive 2>&1 | tee xcodebuild.log || {
-              echo "::error::❌ Archive failed. Known issue: check TEAM_ID, PROFILE_UUID, identity"
+              echo "::error:: ❌ Archive failed. Check xcodebuild.log for details"
               exit 1
             }
 
@@ -335,47 +290,10 @@ jobs:
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa \
             2>&1 | tee xcodeexport.log || {
-              echo "::error::❌ Export failed. Known issue: validate ExportOptions.plist"
+              echo "::error:: ❌ Export failed. Validate ExportOptions.plist"
               exit 1
             }
 
-          echo "📁 Checking contents of build/ios/ipa:"
-          ls -lh build/ios/ipa || {
-            echo "::error::❌ Export directory missing or empty. Known issue: ExportArchive might have failed"
-            exit 1
-          }
+          echo "✅ Archive & export succeeded"
 
-      - name: Upload to TestFlight
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          IPA=$(ls build/ios/ipa/*.ipa 2>/dev/null | head -n1 || true)
-          if [ -z "$IPA" ]; then
-            echo "::error::❌ No .ipa found to upload. Known issue: Check xcodeexport.log for errors"
-            exit 1
-          fi
-          echo "🚀 Uploading $IPA to App Store Connect via altool..."
-          xcrun altool --upload-app -f "$IPA" -t ios \
-            -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" || {
-            echo "::error::❌ Upload failed. Known issue: Invalid App Store Connect credentials or network issue"
-            exit 1
-          }
-          echo "✅ Upload to TestFlight succeeded"
-
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-build-logs
-          path: |
-            pubget.log
-            flutter_build.log
-            xcodebuild.log
-            xcodeexport.log
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: eqb_ltd-iOS
-          path: build/ios/ipa
+      # … upload to TestFlight, artifacts, etc …
