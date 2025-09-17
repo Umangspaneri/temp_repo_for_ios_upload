@@ -6,7 +6,7 @@
     <string>app-store</string>
 
     <key>teamID</key>
-    <string>22H730</string>
+    <string>2YUPR4W35A</string>
 
     <key>signingStyle</key>
     <string>manual</string>
@@ -14,7 +14,7 @@
     <key>provisioningProfiles</key>
     <dict>
         <key>com.rentpedia.client</key>
-        <string>Umang_Paneri</string>
+        <string>Rentpedia_AppStore_2025</string>
     </dict>
 
     <key>uploadBitcode</key>
