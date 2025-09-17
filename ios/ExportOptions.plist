@@ -10,11 +10,11 @@
 
   <key>signingStyle</key>
   <string>manual</string>
-   
+     
   <key>provisioningProfiles</key>
   <dict>
     <key>com.rentpedia</key>
-    <string>Rentpedia_AppStore_2025</string> <!-- ✅ Must match exact profile name -->
+    <string>Rentpedia_AppStore_2025</string> <!-- ✅ Must ma    tch exact profile name -->
   </dict>
    
   <key>uploadBitcode</key>
