@@ -79,19 +79,19 @@ jobs:
 
             security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"') || true
             security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" || true
-            
+
       # --------------------------
       # Ensure ExportOptions.plist exists - create default if missing
       # --------------------------
       - name: Ensure ExportOptions.plist
         run: |
-          set -euo pipefail
-          if [ -f ios/ExportOptions.plist ]; then
+            set -euo pipefail
+            if [ -f ios/ExportOptions.plist ]; then
             echo "Using repo ExportOptions.plist"
             sed -n '1,120p' ios/ExportOptions.plist || true
-          else
-            echo "Creating default ios/ExportOptions.plist (app-store)..."
-            cat > ios/ExportOptions.plist <<'EOF'
+            else
+                echo "Creating default ios/ExportOptions.plist (app-store)..."
+                cat > ios/ExportOptions.plist <<EOF
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
             <plist version="1.0">
@@ -105,8 +105,8 @@ jobs:
             </dict>
             </plist>
             EOF
-                    fi
-
+                fi              
+   
       # --------------------------
       # Build iOS (flutter) to generate Xcode workspace
       # --------------------------
