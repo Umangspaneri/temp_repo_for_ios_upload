@@ -97,17 +97,14 @@ jobs:
             tail -n50 flutter_build.log
             exit 1
           fi
-
       - name: Archive & Export .ipa
         shell: bash
         env:
           DEV_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          PROV_UUID:   ${{ steps.install_prov.outputs.prov_uuid }}
         run: |
           set -euo pipefail
 
           echo "🔎 DEBUG: TEAM_ID=$DEV_TEAM_ID"
-          echo "🔎 DEBUG: PROFILE_UUID=$PROV_UUID"
 
           echo "📦 Archiving…"
           xcodebuild \
@@ -118,8 +115,8 @@ jobs:
             -archivePath build/ios/Runner.xcarchive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEV_TEAM_ID" \
-            CODE_SIGN_IDENTITY="iPhone Distribution: Manish Khatri (2YUPR4W35A)"
-            PROVISIONING_PROFILE_SPECIFIER="Rentedpide_AppStore_2125"
+            CODE_SIGN_IDENTITY="iPhone Distribution: Manish Khatri (2YUPR4W35A)" \
+            PROVISIONING_PROFILE_SPECIFIER="Rentedpide_AppStore_2125" \
             archive \
             2>&1 | tee xcodebuild.log || {
               echo "::error::❌ Archive failed. Last 50 lines of xcodebuild.log:"
@@ -139,6 +136,7 @@ jobs:
             }
 
           echo "✅ .ipa ready at build/ios/ipa"
+
 
       - name: Upload to TestFlight
         env:
