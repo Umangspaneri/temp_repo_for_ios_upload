@@ -131,19 +131,21 @@ jobs:
       # --------------------------
       - name: Archive with Xcode
         run: |
-          set -euo pipefail
-          echo "📦 Archiving with xcodebuild..."
-          mkdir -p build/ios/archive
-          xcodebuild -workspace ios/Runner.xcworkspace \
+            set -euo pipefail
+            echo "📦 Archiving with xcodebuild..."
+            mkdir -p build/ios/archive
+            xcodebuild -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
             CODE_SIGN_STYLE="Manual" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" \
             OTHER_CODE_SIGN_FLAGS="--keychain $HOME/Library/Keychains/build-temp.keychain-db" 2>&1 | tee xcodebuild_archive.log || {
-              echo "::error::xcodebuild archive failed. Last 200 lines:"
-              tail -n 200 xcodebuild_archive.log || true
-              exit 1
+                echo "::error::xcodebuild archive failed. Last 200 lines:"
+                tail -n 200 xcodebuild_archive.log || true
+                exit 1
             }
 
       - name: Export .ipa from archive
