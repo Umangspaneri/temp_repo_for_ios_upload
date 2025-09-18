@@ -35,17 +35,17 @@ jobs:
           name: pubget-log
           path: pubget.log
 
-      - name: Build iOS release
+      - name: Build iOS release (no signing)
         run: |
           set -euo pipefail
-          echo "🚧 Building iOS release with signing…"
-          flutter build ios --release --verbose 2>&1 | tee flutter_build.log || {
+          echo "🚧 Building iOS release without signing…"
+          flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log || {
             echo "::error::❌ Flutter build failed. Last 50 lines:"
             tail -n50 flutter_build.log
             exit 1
           }
 
-      - name: Archive with Xcode
+      - name: Archive with Xcode (manual signing)
         run: |
           set -euo pipefail
           echo "📦 Archiving with Xcode…"
@@ -55,9 +55,10 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
+            CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" || {
-              echo "::error::❌ Xcode archive failed."
+              echo "::error::❌ Xcode archive failed. Check signing identity and profile name."
               exit 1
           }
 
