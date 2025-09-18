@@ -118,8 +118,8 @@ jobs:
             -archivePath build/ios/Runner.xcarchive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEV_TEAM_ID" \
-            CODE_SIGN_IDENTITY="iPhone Distribution" \
-            PROVISIONING_PROFILE="$PROV_UUID" \
+            CODE_SIGN_IDENTITY="iPhone Distribution: Manish Khatri (2YUPR4W35A)"
+            PROVISIONING_PROFILE_SPECIFIER="Rentedpide_AppStore_2125"
             archive \
             2>&1 | tee xcodebuild.log || {
               echo "::error::❌ Archive failed. Last 50 lines of xcodebuild.log:"
