@@ -1,0 +1,73 @@
+name: Build & Package Unsigned iOS App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.3'
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          flutter pub get --verbose 2>&1 | tee pubget.log
+          gem install cocoapods --user-install
+          export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
+          cd ios && pod install --repo-update --silent && cd ..
+
+      - name: Upload pubget log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pubget-log
+          path: pubget.log
+
+      - name: Build & Package Unsigned .ipa
+        id: package_ipa
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "🚧 Building iOS release (no codesign)…"
+          flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log || {
+            echo "::error::❌ Flutter build failed. Last 50 lines:"
+            tail -n50 flutter_build.log
+            exit 1
+          }
+
+          echo "📦 Packaging Runner.app into unsigned .ipa…"
+          IPA_DIR="certs"
+          mkdir -p "$IPA_DIR/Payload" || { echo "::error::❌ Could not create Payload"; exit 1; }
+          cp -R build/ios/iphoneos/Runner.app "$IPA_DIR/Payload/" || { echo "::error::❌ Copy failed"; exit 1; }
+          ( cd "$IPA_DIR" && zip -qry Runner.ipa Payload ) || { echo "::error::❌ Zip failed"; exit 1; }
+          rm -rf "$IPA_DIR/Payload"
+
+          echo "✅ Unsigned IPA generated at: $(pwd)/$IPA_DIR/Runner.ipa"
+          echo "ipa_path=$IPA_DIR/Runner.ipa" >> $GITHUB_OUTPUT
+
+      - name: Upload unsigned .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ios-ipa
+          path: ${{ steps.package_ipa.outputs.ipa_path }}
+
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: |
+            pubget.log
+            flutter_build.log
