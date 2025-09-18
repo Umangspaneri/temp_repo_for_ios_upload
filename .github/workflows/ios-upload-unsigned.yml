@@ -1,4 +1,4 @@
-name: Build & Package Unsigned iOS App
+name: Build & Sign iOS App for App Store
 
 on:
   push:
@@ -35,34 +35,51 @@ jobs:
           name: pubget-log
           path: pubget.log
 
-      - name: Build & Package Unsigned .ipa
-        id: package_ipa
-        shell: bash
+      - name: Build iOS release
         run: |
           set -euo pipefail
-
-          echo "🚧 Building iOS release (no codesign)…"
-          flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log || {
+          echo "🚧 Building iOS release with signing…"
+          flutter build ios --release --verbose 2>&1 | tee flutter_build.log || {
             echo "::error::❌ Flutter build failed. Last 50 lines:"
             tail -n50 flutter_build.log
             exit 1
           }
 
-          echo "📦 Packaging Runner.app into unsigned .ipa…"
-          IPA_DIR="certs"
-          mkdir -p "$IPA_DIR/Payload" || { echo "::error::❌ Could not create Payload"; exit 1; }
-          cp -R build/ios/iphoneos/Runner.app "$IPA_DIR/Payload/" || { echo "::error::❌ Copy failed"; exit 1; }
-          ( cd "$IPA_DIR" && zip -qry Runner.ipa Payload ) || { echo "::error::❌ Zip failed"; exit 1; }
-          rm -rf "$IPA_DIR/Payload"
+      - name: Archive with Xcode
+        run: |
+          set -euo pipefail
+          echo "📦 Archiving with Xcode…"
+          xcodebuild archive \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" || {
+              echo "::error::❌ Xcode archive failed."
+              exit 1
+          }
 
-          echo "✅ Unsigned IPA generated at: $(pwd)/$IPA_DIR/Runner.ipa"
-          echo "ipa_path=$IPA_DIR/Runner.ipa" >> $GITHUB_OUTPUT
+      - name: Export signed .ipa
+        run: |
+          set -euo pipefail
+          echo "📤 Exporting signed IPA…"
+          xcodebuild -exportArchive \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            -exportOptionsPlist certs/tmp.plist \
+            -exportPath certs/ || {
+              echo "::error::❌ IPA export failed. Check tmp.plist and signing setup."
+              exit 1
+          }
 
-      - name: Upload unsigned .ipa artifact
+          echo "✅ Signed IPA generated at: $(pwd)/certs/Runner.ipa"
+
+      - name: Upload signed .ipa
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-ios-ipa
-          path: ${{ steps.package_ipa.outputs.ipa_path }}
+          name: signed-ios-ipa
+          path: certs/Runner.ipa
 
       - name: Upload build logs
         uses: actions/upload-artifact@v4
