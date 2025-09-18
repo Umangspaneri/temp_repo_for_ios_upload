@@ -30,12 +30,11 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --verbose 2>&1 | tee pubget.log
-          tail -n 200 pubget.log || true
+          tail -n200 pubget.log || true
           gem install cocoapods --user-install
           export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          pod repo update --silent || true
           cd ios
-          pod install --repo-update --verbose
+          pod install --repo-update --silent
           cd ..
 
       - name: Upload pubget log
@@ -49,19 +48,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "📥 Installing provisioning profile"
-          PROFILE_PATH="certs/Rentpedia_AppStore_2025.mobileprovision"
-          if [ ! -f "$PROFILE_PATH" ]; then
-            echo "::error::❌ Provisioning profile not found at $PROFILE_PATH"
+
+          PROFILE_FILE="certs/Rentedpide_AppStore_2125.mobileprovision"
+          if [ ! -f "$PROFILE_FILE" ]; then
+            echo "::error::Provisioning profile not found at $PROFILE_FILE"
             exit 1
           fi
-          security cms -D -i "$PROFILE_PATH" > profile.plist
+
+          # Decode and read plist
+          security cms -D -i "$PROFILE_FILE" > profile.plist
           UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" profile.plist)
+          NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" profile.plist)
+
+          # Install into Xcode’s provisioning directory
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp "$PROFILE_PATH" \
+          cp "$PROFILE_FILE" \
              ~/Library/MobileDevice/Provisioning\ Profiles/${UUID}.mobileprovision
-          echo "✅ Installed provisioning profile as ${UUID}.mobileprovision"
-          echo "::set-output name=prov_uuid::$UUID"
+
+          echo "Installed profile UUID=$UUID Name=$NAME"
+
+          # Export outputs for later steps
+          echo "prov_uuid=$UUID" >> $GITHUB_OUTPUT
+          echo "prov_name=$NAME" >> $GITHUB_OUTPUT
 
       - name: Install signing certificate (.p12)
         shell: bash
@@ -69,34 +77,36 @@ jobs:
           CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
         run: |
           set -euo pipefail
-          echo "🔐 Importing certs/Certificates.p12"
+
           CERT_PATH="certs/Certificates.p12"
           if [ ! -f "$CERT_PATH" ]; then
-            echo "::error::❌ Certificate not found at $CERT_PATH"
+            echo "::error::Certificate not found at $CERT_PATH"
             exit 1
           fi
+
+          # Create and unlock a dedicated keychain
           security create-keychain -p "" build.keychain-db
           security unlock-keychain -p "" build.keychain-db
+
+          # Import the P12
           security import "$CERT_PATH" \
             -k ~/Library/Keychains/build.keychain-db \
             -P "$CERT_PASS" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
+
+          # Ensure the new keychain is searched first
           security list-keychains -d user -s \
             ~/Library/Keychains/build.keychain-db \
             $(security list-keychains -d user)
-          echo "✅ Certificate imported into keychain"
 
-      - name: Build iOS release
+          echo "Certificate imported into build.keychain-db"
+
+      - name: Build iOS release (no codesign)
         run: |
           set -euo pipefail
-          echo "🚧 Building iOS release..."
-          flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log
-          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-            echo "::error::❌ Flutter build failed. Last 50 lines:"
-            tail -n50 flutter_build.log
-            exit 1
-          fi
+          flutter build ios --release --no-codesign
+
       - name: Archive & Export .ipa
         shell: bash
         env:
@@ -104,9 +114,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "🔎 DEBUG: TEAM_ID=$DEV_TEAM_ID"
+          echo "Team ID: $DEV_TEAM_ID"
+          echo "Using profile: ${{ steps.install_prov.outputs.prov_name }}"
 
-          echo "📦 Archiving…"
+          # Archive with Manual signing and dynamic specifier
           xcodebuild \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
@@ -116,27 +127,26 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEV_TEAM_ID" \
             CODE_SIGN_IDENTITY="iPhone Distribution: Manish Khatri (2YUPR4W35A)" \
-            PROVISIONING_PROFILE_SPECIFIER="Rentedpide_AppStore_2125" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ steps.install_prov.outputs.prov_name }}" \
             archive \
             2>&1 | tee xcodebuild.log || {
-              echo "::error::❌ Archive failed. Last 50 lines of xcodebuild.log:"
+              echo "::error::Archive failed. Last 50 lines:"
               tail -n50 xcodebuild.log
               exit 1
             }
 
-          echo "📤 Exporting .ipa…"
+          # Export the signed .ipa
           xcodebuild -exportArchive \
             -archivePath build/ios/Runner.xcarchive \
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa \
             2>&1 | tee xcodeexport.log || {
-              echo "::error::❌ Export failed. Last 50 lines of xcodeexport.log:"
+              echo "::error::Export failed. Last 50 lines:"
               tail -n50 xcodeexport.log
               exit 1
             }
 
           echo "✅ .ipa ready at build/ios/ipa"
-
 
       - name: Upload to TestFlight
         env:
@@ -144,31 +154,21 @@ jobs:
           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          IPA=$(ls build/ios/ipa/*.ipa 2>/dev/null | head -n1)
+          IPA=$(ls build/ios/ipa/*.ipa | head -n1)
           if [ -z "$IPA" ]; then
-            echo "::error::❌ No .ipa found to upload"
+            echo "::error::No .ipa found to upload"
             exit 1
           fi
-          echo "🚀 Uploading $IPA to App Store Connect via altool..."
+          echo "Uploading $IPA to TestFlight..."
           xcrun altool --upload-app -f "$IPA" -t ios \
-            -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" || {
-            echo "::error::❌ Upload failed"
-            exit 1
-          }
-          echo "✅ Upload to TestFlight succeeded"
+            -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD"
 
-      - name: Upload logs
+      - name: Upload logs & artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-logs
+          name: ios-build
           path: |
             pubget.log
-            flutter_build.log
             xcodebuild.log
             xcodeexport.log
-  
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: eqb_ltd-iOS
-          path: build/ios/ipa
+            build/ios/ipa/*.ipa
