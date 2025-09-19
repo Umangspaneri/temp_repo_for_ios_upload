@@ -138,6 +138,31 @@ jobs:
           name: flutter-build-log
           path: flutter_build.log
 
+
+      - name: Decode and register provisioning profile
+        run: |
+          echo "📜 Decoding provisioning profile for Xcode registration..."
+          security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision > parsed_profile.plist || {
+            echo "::error::Failed to decode provisioning profile"
+            exit 1
+          }
+          PROFILE_UUID=$(defaults read parsed_profile.plist UUID || echo "")
+          if [ -z "$PROFILE_UUID" ]; then
+            echo "::error::No UUID found in provisioning profile"
+            exit 1
+          fi
+          cp certs/Rentpedia_AppStore_2025.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
+          echo "✅ Registered profile with UUID: $PROFILE_UUID"
+
+
+
+      - name: Upload decoded profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: parsed-profile
+          path: parsed_profile.plist
+
+
       - name: Archive with Xcode
         env:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
