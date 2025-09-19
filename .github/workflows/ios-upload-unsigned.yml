@@ -140,6 +140,7 @@ jobs:
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
             CODE_SIGN_STYLE="Manual" \
+            CODE_SIGN_IDENTITY="Apple Distribution"
             DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
             PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" \
             OTHER_CODE_SIGN_FLAGS="--keychain $HOME/Library/Keychains/build-temp.keychain-db" 2>&1 | tee xcodebuild_archive.log || {
