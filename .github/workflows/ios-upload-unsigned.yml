@@ -201,8 +201,8 @@ jobs:
           name: xcodebuild-export-log
           path: xcodebuild_export.log
 
-      - name: Rename IPA to Rentpedia.ipa
-        run: mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
+      # - name: Rename IPA to Rentpedia.ipa
+      #   run: mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
   
       - name: Upload signed IPA artifact
         uses: actions/upload-artifact@v4
