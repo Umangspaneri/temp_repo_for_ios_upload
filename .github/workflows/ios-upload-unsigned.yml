@@ -1,3 +1,237 @@
+# name: Build & Sign iOS App for App Store
+
+# on:
+#   push:
+#     branches: [ main ]
+#   workflow_dispatch:
+
+# jobs:
+#   build:
+#     runs-on: macos-14
+#     timeout-minutes: 120
+
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v3
+
+#       - name: Setup Flutter
+#         uses: subosito/flutter-action@v2
+#         with:
+#           flutter-version: '3.35.3'
+#           channel: 'stable'
+      
+#       - name: Select Xcode 16
+#         run: sudo xcode-select -s /Applications/Xcode_16.0.app
+
+#       - name: Confirm Xcode version
+#         run: xcodebuild -version
+
+        
+#       - name: Check Flutter & Dart versions
+#         run: |
+#           flutter --version
+#           dart --version
+
+#       - name: Install dependencies (pub get + CocoaPods)
+#         run: |
+#           set -euo pipefail
+#           flutter pub get --verbose 2>&1 | tee pubget.log || (tail -n 200 pubget.log && exit 1)
+#           gem install cocoapods --user-install
+#           export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
+#           cd ios
+#           pod install --repo-update --verbose 2>&1 | tee pod_install.log || (tail -n 200 pod_install.log && exit 1)
+#           cd ..
+#       - name: Upload pubget & pod logs
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: dependency-logs
+#           path: |
+#             pubget.log
+#             ios/pod_install.log
+
+#       # --------------------------
+#       # Decode & install provisioning profile (robust)
+#       # --------------------------
+
+#       - name: Install provisioning profile from repo
+#         run: |
+#             set -euo pipefail
+#             echo "📦 Installing provisioning profile from certs/"
+#             mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+#             cp certs/Rentpedia_AppStore_2025.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+#             echo "✅ Installed certs/Rentpedia_AppStore_2025.mobileprovision"
+
+#       # --------------------------
+#       # Decode & import signing certificate (.p12) into a temporary keychain
+#       # --------------------------
+#       - name: Import signing certificate from repo
+#         env:
+#             CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
+#         run: |
+#             set -euo pipefail
+#             echo "🔐 Importing certs/Certificates.p12 into temporary keychain..."
+
+#             KEYCHAIN_NAME=build-temp.keychain
+#             KEYCHAIN_PASS=""
+#             KEYCHAIN_PATH="$HOME/Library/Keychains/${KEYCHAIN_NAME}-db"
+
+#             security create-keychain -p "$KEYCHAIN_PASS" "${KEYCHAIN_NAME}-db"
+#             security set-keychain-settings -t 3600 -u "${KEYCHAIN_NAME}-db"
+#             security unlock-keychain -p "$KEYCHAIN_PASS" "${KEYCHAIN_NAME}-db"
+
+#             security import certs/Certificates.p12 -k "$KEYCHAIN_PATH" -P "$CERT_PASS" -T /usr/bin/codesign -T /usr/bin/security || {
+#             echo "::error::Failed to import cert.p12. Check IOS_CERT_PASSWORD."
+#             exit 1
+#             }
+
+#             security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"') || true
+#             security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" || true
+
+#       # --------------------------
+#       # Ensure ExportOptions.plist exists - create default if missing
+#       # --------------------------
+#       - name: Ensure ExportOptions.plist
+#         run: |
+#             set -euo pipefail
+#             if [ -f ios/ExportOptions.plist ]; then
+#             echo "Using repo ExportOptions.plist"
+#             sed -n '1,120p' ios/ExportOptions.plist || true
+#             else
+#                 echo "Creating default ios/ExportOptions.plist (app-store)..."
+#                 cat > ios/ExportOptions.plist <<EOF
+#             <?xml version="1.0" encoding="UTF-8"?>
+#             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+#             <plist version="1.0">
+#             <dict>
+#             <key>method</key>
+#             <string>app-store</string>
+#             <key>uploadBitcode</key>
+#             <false/>
+#             <key>uploadSymbols</key>
+#             <true/>
+#             </dict>
+#             </plist>
+#             EOF
+#                 fi              
+   
+#       # --------------------------
+#       # Build iOS (flutter) to generate Xcode workspace
+#       # --------------------------
+#       - name: Build iOS (flutter) -- generate workspace
+#         run: |
+#           set -euo pipefail
+#           echo "📦 Running flutter build ios --no-codesign to generate workspace..."
+#           flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log || {
+#             echo "::error::Flutter build ios failed. See flutter_build.log (uploaded as artifact)."
+#             tail -n 200 flutter_build.log || true
+#             exit 1
+#           }
+
+#       - name: Upload flutter build log
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: flutter-build-log
+#           path: flutter_build.log
+
+#       # --------------------------
+#       # Xcode archive and export (codesign uses imported keychain + installed provisioning profile)
+#       # --------------------------
+#       - name: Archive with Xcode
+#         env:
+#           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+#           PROVISIONING_PROFILE_SPECIFIER: Rentpedia_AppStore_2025
+#           OTHER_CODE_SIGN_FLAGS: "--keychain $HOME/Library/Keychains/build-temp.keychain-db"
+#         run: |
+#           set -euo pipefail
+#           echo "📦 Archiving with xcodebuild on Xcode 16..."
+#           # ensure we’re still on Xcode 16
+#           sudo xcode-select -s /Applications/Xcode_16.0.app
+
+#           mkdir -p build/ios/archive
+#           xcodebuild \
+#             -workspace ios/Runner.xcworkspace \
+#             -scheme Runner \
+#             -configuration Release \
+#             -sdk iphoneos \
+#             -archivePath build/ios/archive/Runner.xcarchive \
+#             CODE_SIGN_STYLE=Manual \
+#             CODE_SIGN_IDENTITY="Apple Distribution" \
+#             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+#             PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
+#             OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS" \
+#           2>&1 | tee xcodebuild_archive.log
+
+#           # fail on error
+
+#       - name: Export .ipa from archive
+#         run: |
+#           set -euo pipefail
+#           echo "📤 Exporting .ipa with xcodebuild -exportArchive..."
+#           mkdir -p build/ios/ipa
+#           xcodebuild -exportArchive \
+#             -archivePath build/ios/archive/Runner.xcarchive \
+#             -exportOptionsPlist ios/ExportOptions.plist \
+#             -exportPath build/ios/ipa 2>&1 | tee xcodebuild_export.log || {
+#               echo "::error::xcodebuild -exportArchive failed. Last 200 lines:"
+#               tail -n 200 xcodebuild_export.log || true
+#               exit 1
+#             }
+#           echo "✅ Exported IPA files:"
+#           ls -la build/ios/ipa || true
+
+#       # --------------------------
+#       # Upload IPA artifact and logs
+#       # --------------------------
+#       - name: Upload IPA artifact
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: signed-ios-ipa
+#           path: build/ios/ipa
+
+#       - name: Upload xcode logs
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: ios-build-logs
+#           path: |
+#             flutter_build.log
+#             xcodebuild_archive.log
+#             xcodebuild_export.log
+#             parsed_profile.plist
+#             security_decode.err || true
+
+#       # --------------------------
+#       # Upload to TestFlight (altool)
+#       # --------------------------
+#       - name: Upload to TestFlight (altool)
+#         env:
+#           APPLE_ID: ${{ secrets.APPLE_ID }}
+#           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+#         run: |
+#           set -euo pipefail
+#           IPA=$(ls build/ios/ipa/*.ipa | head -n1 || true)
+#           if [ -z "$IPA" ]; then
+#             echo "::error::No .ipa found to upload. Check previous steps and uploaded logs."
+#             exit 1
+#           fi
+#           echo "Uploading $IPA to App Store Connect via altool..."
+#           xcrun altool --upload-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" 2>&1 | tee altool_upload.log || {
+#             echo "::error::altool upload failed. See altool_upload.log"
+#             tail -n 200 altool_upload.log || true
+#             exit 1
+#           }
+#           echo "✅ Upload finished (check App Store Connect for processing)."
+#           ls -la "$IPA" || true
+
+#       # final artifact upload (again, for convenience)
+#       - name: Upload final artifacts
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: final-ios-artifacts
+#           path: |
+#             build/ios/ipa
+#             altool_upload.log
+
+
 name: Build & Sign iOS App for App Store
 
 on:
@@ -18,7 +252,19 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.3'
-          channel: 'stable'
+          channel: stable
+
+      - name: List installed Xcode versions
+        run: ls /Applications | grep Xcode || echo "no Xcode found"
+
+      - name: Select Xcode 16
+        run: |
+          X16=$(ls /Applications | grep '^Xcode_16' | head -n1)
+          echo "Switching to $X16"
+          sudo xcode-select -s /Applications/"$X16"/Contents/Developer
+
+      - name: Confirm Xcode version
+        run: xcodebuild -version
 
       - name: Check Flutter & Dart versions
         run: |
@@ -28,12 +274,11 @@ jobs:
       - name: Install dependencies (pub get + CocoaPods)
         run: |
           set -euo pipefail
-          flutter pub get --verbose 2>&1 | tee pubget.log || (tail -n 200 pubget.log && exit 1)
+          flutter pub get --verbose 2>&1 | tee pubget.log || (tail -n200 pubget.log && exit 1)
           gem install cocoapods --user-install
           export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          cd ios
-          pod install --repo-update --verbose 2>&1 | tee pod_install.log || (tail -n 200 pod_install.log && exit 1)
-          cd ..
+          cd ios && pod install --repo-update --verbose 2>&1 | tee pod_install.log || (tail -n200 pod_install.log && exit 1) && cd ..
+
       - name: Upload pubget & pod logs
         uses: actions/upload-artifact@v4
         with:
@@ -42,81 +287,56 @@ jobs:
             pubget.log
             ios/pod_install.log
 
-      # --------------------------
-      # Decode & install provisioning profile (robust)
-      # --------------------------
-
       - name: Install provisioning profile from repo
         run: |
-            set -euo pipefail
-            echo "📦 Installing provisioning profile from certs/"
-            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-            cp certs/Rentpedia_AppStore_2025.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-            echo "✅ Installed certs/Rentpedia_AppStore_2025.mobileprovision"
+          set -euo pipefail
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp certs/Rentpedia_AppStore_2025.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+          echo "✅ Installed Rentpedia_AppStore_2025.mobileprovision"
 
-      # --------------------------
-      # Decode & import signing certificate (.p12) into a temporary keychain
-      # --------------------------
       - name: Import signing certificate from repo
         env:
-            CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
+          CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
         run: |
-            set -euo pipefail
-            echo "🔐 Importing certs/Certificates.p12 into temporary keychain..."
+          set -euo pipefail
+          KEYCHAIN=build-temp.keychain
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security import certs/Certificates.p12 \
+            -k ~/Library/Keychains/"$KEYCHAIN"-db \
+            -P "$CERT_PASS" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security list-keychains -d user -s ~/Library/Keychains/"$KEYCHAIN"-db $(security list-keychains -d user | tr -d '"') || true
 
-            KEYCHAIN_NAME=build-temp.keychain
-            KEYCHAIN_PASS=""
-            KEYCHAIN_PATH="$HOME/Library/Keychains/${KEYCHAIN_NAME}-db"
-
-            security create-keychain -p "$KEYCHAIN_PASS" "${KEYCHAIN_NAME}-db"
-            security set-keychain-settings -t 3600 -u "${KEYCHAIN_NAME}-db"
-            security unlock-keychain -p "$KEYCHAIN_PASS" "${KEYCHAIN_NAME}-db"
-
-            security import certs/Certificates.p12 -k "$KEYCHAIN_PATH" -P "$CERT_PASS" -T /usr/bin/codesign -T /usr/bin/security || {
-            echo "::error::Failed to import cert.p12. Check IOS_CERT_PASSWORD."
-            exit 1
-            }
-
-            security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"') || true
-            security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH" || true
-
-      # --------------------------
-      # Ensure ExportOptions.plist exists - create default if missing
-      # --------------------------
       - name: Ensure ExportOptions.plist
         run: |
-            set -euo pipefail
-            if [ -f ios/ExportOptions.plist ]; then
+          set -euo pipefail
+          if [ -f ios/ExportOptions.plist ]; then
             echo "Using repo ExportOptions.plist"
             sed -n '1,120p' ios/ExportOptions.plist || true
-            else
-                echo "Creating default ios/ExportOptions.plist (app-store)..."
-                cat > ios/ExportOptions.plist <<EOF
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-            <key>method</key>
-            <string>app-store</string>
-            <key>uploadBitcode</key>
-            <false/>
-            <key>uploadSymbols</key>
-            <true/>
-            </dict>
-            </plist>
-            EOF
-                fi              
-   
-      # --------------------------
-      # Build iOS (flutter) to generate Xcode workspace
-      # --------------------------
+          else
+            echo "Creating default ios/ExportOptions.plist (app-store)…"
+            cat > ios/ExportOptions.plist <<EOF
+              <?xml version="1.0" encoding="UTF-8"?>
+              <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+              <plist version="1.0">
+              <dict>
+                <key>method</key><string>app-store</string>
+                <key>uploadBitcode</key><false/>
+                <key>uploadSymbols</key><true/>
+              </dict>
+              </plist>
+              EOF
+                    fi
+
       - name: Build iOS (flutter) -- generate workspace
         run: |
           set -euo pipefail
-          echo "📦 Running flutter build ios --no-codesign to generate workspace..."
           flutter build ios --release --no-codesign --verbose 2>&1 | tee flutter_build.log || {
-            echo "::error::Flutter build ios failed. See flutter_build.log (uploaded as artifact)."
-            tail -n 200 flutter_build.log || true
+            echo "::error::Flutter build ios failed. Last lines:"
+            tail -n200 flutter_build.log
             exit 1
           }
 
@@ -126,93 +346,74 @@ jobs:
           name: flutter-build-log
           path: flutter_build.log
 
-      # --------------------------
-      # Xcode archive and export (codesign uses imported keychain + installed provisioning profile)
-      # --------------------------
       - name: Archive with Xcode
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          PROVISIONING_PROFILE_SPECIFIER: Rentpedia_AppStore_2025
+          OTHER_CODE_SIGN_FLAGS: "--keychain $HOME/Library/Keychains/build-temp.keychain-db"
         run: |
-            set -euo pipefail
-            echo "📦 Archiving with xcodebuild..."
-            mkdir -p build/ios/archive
-            xcodebuild -workspace ios/Runner.xcworkspace \
+          set -euo pipefail
+          echo "📦 Archiving with xcodebuild on Xcode 16…"
+          X16=$(ls /Applications | grep '^Xcode_16' | head -n1)
+          sudo xcode-select -s /Applications/"$X16"/Contents/Developer
+          mkdir -p build/ios/archive
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
-            CODE_SIGN_STYLE="Manual" \
-            CODE_SIGN_IDENTITY="Apple Distribution"
-            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
-            PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $HOME/Library/Keychains/build-temp.keychain-db" 2>&1 | tee xcodebuild_archive.log || {
-                echo "::error::xcodebuild archive failed. Last 200 lines:"
-                tail -n 200 xcodebuild_archive.log || true
-                exit 1
-            }
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
+            OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS" \
+          2>&1 | tee xcodebuild_archive.log || {
+            echo "::error::xcodebuild archive failed. Last lines:"
+            tail -n200 xcodebuild_archive.log
+            exit 1
+          }
 
       - name: Export .ipa from archive
         run: |
           set -euo pipefail
-          echo "📤 Exporting .ipa with xcodebuild -exportArchive..."
+          echo "📤 Exporting .ipa with xcodebuild -exportArchive…"
           mkdir -p build/ios/ipa
           xcodebuild -exportArchive \
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportOptionsPlist ios/ExportOptions.plist \
-            -exportPath build/ios/ipa 2>&1 | tee xcodebuild_export.log || {
-              echo "::error::xcodebuild -exportArchive failed. Last 200 lines:"
-              tail -n 200 xcodebuild_export.log || true
-              exit 1
-            }
-          echo "✅ Exported IPA files:"
-          ls -la build/ios/ipa || true
+            -exportPath build/ios/ipa \
+          2>&1 | tee xcodebuild_export.log || {
+            echo "::error::xcodebuild -exportArchive failed. Last lines:"
+            tail -n200 xcodebuild_export.log
+            exit 1
+          }
+          echo "✅ Exported IPA files:" && ls -la build/ios/ipa
 
-      # --------------------------
-      # Upload IPA artifact and logs
-      # --------------------------
+      - name: Rename IPA to Rentpedia.ipa
+        run: mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
+
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: signed-ios-ipa
-          path: build/ios/ipa
+          path: build/ios/ipa/Rentpedia.ipa
 
-      - name: Upload xcode logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-build-logs
-          path: |
-            flutter_build.log
-            xcodebuild_archive.log
-            xcodebuild_export.log
-            parsed_profile.plist
-            security_decode.err || true
-
-      # --------------------------
-      # Upload to TestFlight (altool)
-      # --------------------------
       - name: Upload to TestFlight (altool)
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          IPA=$(ls build/ios/ipa/*.ipa | head -n1 || true)
-          if [ -z "$IPA" ]; then
-            echo "::error::No .ipa found to upload. Check previous steps and uploaded logs."
-            exit 1
-          fi
-          echo "Uploading $IPA to App Store Connect via altool..."
-          xcrun altool --upload-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" 2>&1 | tee altool_upload.log || {
-            echo "::error::altool upload failed. See altool_upload.log"
-            tail -n 200 altool_upload.log || true
-            exit 1
-          }
-          echo "✅ Upload finished (check App Store Connect for processing)."
-          ls -la "$IPA" || true
+          IPA=$(ls build/ios/ipa/*.ipa | head -n1)
+          xcrun altool --upload-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APP_SPECIFIC_PASSWORD" 2>&1 | tee altool_upload.log
 
-      # final artifact upload (again, for convenience)
       - name: Upload final artifacts
         uses: actions/upload-artifact@v4
         with:
           name: final-ios-artifacts
           path: |
-            build/ios/ipa
+            flutter_build.log
+            xcodebuild_archive.log
+            xcodebuild_export.log
             altool_upload.log
