@@ -139,20 +139,32 @@ jobs:
           path: flutter_build.log
 
 
-      - name: Decode and register provisioning profile
-        run: |
-          echo "📜 Decoding provisioning profile for Xcode registration..."
-          security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision > parsed_profile.plist || {
-            echo "::error::Failed to decode provisioning profile"
-            exit 1
-          }
-          PROFILE_UUID=$(defaults read parsed_profile.plist UUID || echo "")
-          if [ -z "$PROFILE_UUID" ]; then
-            echo "::error::No UUID found in provisioning profile"
-            exit 1
-          fi
-          cp certs/Rentpedia_AppStore_2025.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
-          echo "✅ Registered profile with UUID: $PROFILE_UUID"
+        - name: Decode and register provisioning profile
+          run: |
+            echo "📜 Decoding provisioning profile for Xcode registration..."
+            security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision > parsed_profile.plist || {
+              echo "::error::Failed to decode provisioning profile"
+              exit 1
+            }
+
+            # Try PlistBuddy first
+            PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" parsed_profile.plist 2>/dev/null || echo "")
+
+            # Fallback to grep if PlistBuddy fails
+            if [ -z "$PROFILE_UUID" ]; then
+              PROFILE_UUID=$(grep -A1 '<key>UUID</key>' parsed_profile.plist | tail -n1 | sed -E 's/.*<string>(.*)<\/string>.*/\1/')
+            fi
+
+            if [ -z "$PROFILE_UUID" ]; then
+              echo "::error::No UUID found in provisioning profile"
+              exit 1
+            fi
+
+            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+            cp certs/Rentpedia_AppStore_2025.mobileprovision \
+              ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
+
+            echo "✅ Registered profile with UUID: $PROFILE_UUID"
 
 
 
