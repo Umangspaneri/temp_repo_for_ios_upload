@@ -195,6 +195,9 @@ jobs:
             exit 1
           }
 
+      - name: List IPA folder contents
+        run: ls -l build/ios/ipa
+
       - name: Upload xcodebuild export log
         uses: actions/upload-artifact@v4
         with:
@@ -210,6 +213,13 @@ jobs:
           name: signed-ios-ipa
           path: build/ios/ipa/Rentpedia.ipa
 
+      - name: Verify IPA exists
+        run: |
+          if [ ! -f build/ios/ipa/Rentpedia.ipa ]; then
+            echo "::error::❌ IPA not found before upload"
+            exit 1
+          fi
+
       - name: Upload to TestFlight (altool)
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -224,6 +234,10 @@ jobs:
             tail -n200 altool_upload.log
             exit 1
           }
+
+      - name: Print altool upload result
+        run: tail -n100 altool_upload.log
+
 
       - name: Upload final artifacts
         uses: actions/upload-artifact@v4
