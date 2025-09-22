@@ -435,18 +435,18 @@ jobs:
             exit 1
           }
 
+      - name: Upload xcodebuild archive log
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-archive-log
+          path: xcodebuild_archive.log
+
       - name: Verify archive exists
         run: |
           if [ ! -d build/ios/archive/Runner.xcarchive ]; then
             echo "::error::❌ Archive not created"
             exit 1
           fi
-
-      - name: Upload xcodebuild archive log
-        uses: actions/upload-artifact@v4
-        with:
-          name: xcodebuild-archive-log
-          path: xcodebuild_archive.log
 
       - name: Export .ipa from archive
         run: |
