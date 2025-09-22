@@ -438,7 +438,6 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
-            # CODE_SIGN_STYLE=Manual \
             CODE_SIGN_STYLE=Automatic
             CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
