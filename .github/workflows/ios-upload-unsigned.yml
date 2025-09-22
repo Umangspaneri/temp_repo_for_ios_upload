@@ -364,11 +364,22 @@ jobs:
             ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
           echo "✅ Registered profile UUID: $PROFILE_UUID"
 
+      - name: Verify profile registration
+        run: ls -l ~/Library/MobileDevice/Provisioning\ Profiles
+
+
       - name: Upload decoded profile
         uses: actions/upload-artifact@v4
         with:
           name: parsed-profile
           path: parsed_profile.plist
+
+      - name: Check profile name and team ID
+        run: |
+          echo "🔍 Extracting profile name and team ID..."
+          plutil -extract Name raw parsed_profile.plist
+          plutil -extract TeamIdentifier raw parsed_profile.plist
+
 
       - name: Ensure ExportOptions.plist
         run: |
@@ -411,6 +422,9 @@ jobs:
           name: flutter-build-log
           path: flutter_build.log
 
+      - name: List available schemes
+        run: xcodebuild -list -workspace ios/Runner.xcworkspace
+
       - name: Archive with Xcode
         env:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
@@ -424,7 +438,8 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
-            CODE_SIGN_STYLE=Manual \
+            # CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_STYLE=Automatic
             CODE_SIGN_IDENTITY="Apple Distribution" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_SPECIFIER" \
