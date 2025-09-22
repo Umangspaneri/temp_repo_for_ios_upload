@@ -195,6 +195,12 @@ jobs:
             exit 1
           }
 
+      - name: Move IPA to expected folder
+        run: |
+          mkdir -p build/ios/ipa
+          mv build/ios/archive/ipa/Rentpedia.ipa build/ios/ipa/Rentpedia.ipa
+
+
       - name: List IPA folder contents
         run: ls -l build/ios/ipa
 
@@ -211,14 +217,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: signed-ios-ipa
-          path: build/ios/ipa/Rentpedia.ipa
+          path: build/ios/archive/ipa/Rentpedia.ipa
 
       - name: Verify IPA exists
         run: |
-          if [ ! -f build/ios/ipa/Rentpedia.ipa ]; then
+          if [ ! -f build/ios/archive/ipa/Rentpedia.ipa ]; then
             echo "::error::❌ IPA not found before upload"
             exit 1
           fi
+
 
       - name: Upload to TestFlight (altool)
         env:
@@ -226,7 +233,7 @@ jobs:
           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
         run: |
           xcrun altool --upload-app \
-            -f build/ios/ipa/Rentpedia.ipa \
+            -f build/ios/archive/ipa/Rentpedia.ipa \
             -u "$APPLE_ID" \
             -p "$APP_SPECIFIC_PASSWORD" \
           2>&1 | tee altool_upload.log || {
