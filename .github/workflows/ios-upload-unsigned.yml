@@ -258,7 +258,7 @@ jobs:
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.3'
+          flutter-version: '3.27.1'
           channel: stable
           cache: true
 
@@ -288,7 +288,37 @@ jobs:
       - name: 📋 Get Certificate
         run: |
           echo "📋 Finding certificate..."
-          CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep -E "(Distribution|iPhone)" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/')
+          echo "=== All certificates in keychain ==="
+          security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db
+          
+          # Try different certificate name patterns
+          CERT=""
+          
+          # Pattern 1: Look for any Distribution certificate
+          CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep "Distribution" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          
+          # Pattern 2: Look for Apple Distribution
+          if [ -z "$CERT" ]; then
+            CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep "Apple Distribution" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          fi
+          
+          # Pattern 3: Look for iPhone Distribution
+          if [ -z "$CERT" ]; then
+            CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep "iPhone Distribution" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          fi
+          
+          # Pattern 4: Just get the first valid certificate
+          if [ -z "$CERT" ]; then
+            CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          fi
+          
+          if [ -z "$CERT" ]; then
+            echo "❌ No certificate found!"
+            echo "Available certificates:"
+            security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db
+            exit 1
+          fi
+          
           echo "CODE_SIGN_IDENTITY=$CERT" >> $GITHUB_ENV
           echo "✅ Certificate found: $CERT"
 
