@@ -78,8 +78,7 @@ jobs:
             build/ios/archive/Runner.xcarchive
             ios/ExportOptions.plist
 
-
-    - name: 🔐 Import certs and profile
+      - name: 🔐 Import certs and profile
         run: |
             security create-keychain -p "" build.keychain
             security unlock-keychain -p "" build.keychain
