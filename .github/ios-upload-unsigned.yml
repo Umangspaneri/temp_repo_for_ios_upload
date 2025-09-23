@@ -40,7 +40,14 @@ jobs:
           echo "🔐 Setting up keychain..."
           security create-keychain -p "" build-temp.keychain-db
           security unlock-keychain -p "" build-temp.keychain-db
+          
+          # Import your certificates using your GitHub secret
           security import certs/Certificates.p12 -k ~/Library/Keychains/build-temp.keychain-db -P "${{ secrets.IOS_CERT_PASSWORD }}" -T /usr/bin/codesign
+          security import certs/27DLU45ZHK.p12 -k ~/Library/Keychains/build-temp.keychain-db -P "${{ secrets.IOS_CERT_PASSWORD }}" -T /usr/bin/codesign
+          
+          # Import .cer files if needed
+          security import certs/27DLU45ZHK.cer -k ~/Library/Keychains/build-temp.keychain-db -T /usr/bin/codesign
+          
           security set-key-partition-list -S apple-tool:,apple-tool:codesign: -s -k "" ~/Library/Keychains/build-temp.keychain-db
           echo "✅ Keychain setup complete"
 
@@ -84,13 +91,23 @@ jobs:
       - name: 📱 Setup Provisioning
         run: |
           echo "📱 Setting up provisioning profile..."
+          
+          # Use your actual provisioning profile
           security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision > profile.plist
+          
           UUID=$(plutil -extract UUID raw profile.plist)
           BUNDLE_ID=$(plutil -extract Entitlements.application-identifier raw profile.plist | sed 's/^[^.]*\.//')
+          
           echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
           echo "BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_ENV
+          
+          # Install provisioning profile
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp certs/Rentpedia_AppStore_2025.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          
+          echo "✅ Bundle ID: $BUNDLE_ID"
+          echo "✅ Team ID (from secrets): ${{ secrets.APPLE_TEAM_ID }}" 
+          echo "✅ Profile UUID: $UUID"
           echo "✅ Provisioning profile setup complete"
 
       - name: 📝 Create Export Options
@@ -104,15 +121,21 @@ jobs:
             <key>method</key><string>app-store</string>
             <key>signingStyle</key><string>manual</string>
             <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
-            <key>signingCertificate</key><string>${{ env.CODE_SIGN_IDENTITY }}</string>
+            <key>signingCertificate</key><string>\${{ env.CODE_SIGN_IDENTITY }}</string>
             <key>provisioningProfiles</key>
             <dict>
-              <key>${{ env.BUNDLE_ID }}</key>
-              <string>${{ env.PROFILE_UUID }}</string>
+              <key>\${{ env.BUNDLE_ID }}</key>
+              <string>\${{ env.PROFILE_UUID }}</string>
             </dict>
+            <key>uploadBitcode</key><false/>
+            <key>uploadSymbols</key><true/>
+            <key>compileBitcode</key><false/>
           </dict>
           </plist>
           EOF
+          
+          echo "=== Export Options ==="
+          cat ios/ExportOptions.plist
           echo "✅ Export options created"
 
       - name: 🔨 Flutter Build
@@ -132,7 +155,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
             CODE_SIGN_IDENTITY="${{ env.CODE_SIGN_IDENTITY }}" \
-            PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ env.PROFILE_UUID }}" \
+            PRODUCT_BUNDLE_IDENTIFIER="${{ env.BUNDLE_ID }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain $HOME/Library/Keychains/build-temp.keychain-db" \
             archive
           echo "✅ Archive created successfully"
