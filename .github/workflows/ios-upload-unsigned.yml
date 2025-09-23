@@ -319,12 +319,26 @@ jobs:
       # 8. Decode & install provisioning profile
       - name: Register provisioning profile
         run: |
-          security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision \
-            > profile.plist
-          UUID=$(plutil -extract UUID raw profile.plist)
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp certs/Rentpedia_AppStore_2025.mobileprovision \
-            "~/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          PROFILE_PATH=certs/Rentpedia_AppStore_2025.mobileprovision
+          PROFILE_PLIST=profile.plist
+          DEST_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          # Decode the profile to extract UUID
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+
+          UUID=$(plutil -extract UUID raw "$PROFILE_PLIST")
+          if [ -z "$UUID" ]; then
+            echo "::error::Failed to extract UUID from $PROFILE_PLIST"
+            exit 1
+          fi
+
+          # Ensure the destination directory exists
+          mkdir -p "$DEST_DIR"
+
+          # Copy using $HOME, not ~
+          cp "$PROFILE_PATH" "$DEST_DIR/${UUID}.mobileprovision"
+
+          echo "✅ Registered provisioning profile at: $DEST_DIR/${UUID}.mobileprovision"
 
       # 9. Prepare ExportOptions.plist for automatic signing
       - name: Create ExportOptions.plist
