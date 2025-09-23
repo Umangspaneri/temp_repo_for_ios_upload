@@ -1,0 +1,167 @@
+name: iOS Build & Upload
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.3'
+          channel: stable
+          cache: true
+
+      - name: 📦 Dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          flutter pub get
+          brew install cocoapods
+          cd ios && pod install && cd ..
+          echo "✅ Dependencies installed"
+
+      - name: 🔧 Setup Xcode
+        run: |
+          echo "🔧 Setting up Xcode..."
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          echo "✅ Xcode 16.1 selected"
+
+      - name: 🔐 Setup Keychain
+        run: |
+          echo "🔐 Setting up keychain..."
+          security create-keychain -p "" build-temp.keychain-db
+          security unlock-keychain -p "" build-temp.keychain-db
+          security import certs/Certificates.p12 -k ~/Library/Keychains/build-temp.keychain-db -P "${{ secrets.IOS_CERT_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple-tool:codesign: -s -k "" ~/Library/Keychains/build-temp.keychain-db
+          echo "✅ Keychain setup complete"
+
+      - name: 📋 Get Certificate
+        run: |
+          echo "📋 Finding certificate..."
+          echo "=== All certificates in keychain ==="
+          security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db
+          
+          # Try different certificate name patterns
+          CERT=""
+          
+          # Pattern 1: Look for any Distribution certificate
+          CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep "Distribution" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          
+          # Pattern 2: Look for Apple Distribution
+          if [ -z "$CERT" ]; then
+            CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep "Apple Distribution" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          fi
+          
+          # Pattern 3: Look for iPhone Distribution
+          if [ -z "$CERT" ]; then
+            CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep "iPhone Distribution" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          fi
+          
+          # Pattern 4: Just get the first valid certificate
+          if [ -z "$CERT" ]; then
+            CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
+          fi
+          
+          if [ -z "$CERT" ]; then
+            echo "❌ No certificate found!"
+            echo "Available certificates:"
+            security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db
+            exit 1
+          fi
+          
+          echo "CODE_SIGN_IDENTITY=$CERT" >> $GITHUB_ENV
+          echo "✅ Certificate found: $CERT"
+
+      - name: 📱 Setup Provisioning
+        run: |
+          echo "📱 Setting up provisioning profile..."
+          security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision > profile.plist
+          UUID=$(plutil -extract UUID raw profile.plist)
+          BUNDLE_ID=$(plutil -extract Entitlements.application-identifier raw profile.plist | sed 's/^[^.]*\.//')
+          echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+          echo "BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_ENV
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp certs/Rentpedia_AppStore_2025.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          echo "✅ Provisioning profile setup complete"
+
+      - name: 📝 Create Export Options
+        run: |
+          echo "📝 Creating export options..."
+          cat > ios/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingCertificate</key><string>${{ env.CODE_SIGN_IDENTITY }}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${{ env.BUNDLE_ID }}</key>
+              <string>${{ env.PROFILE_UUID }}</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+          echo "✅ Export options created"
+
+      - name: 🔨 Flutter Build
+        run: |
+          echo "🔨 Building Flutter app..."
+          flutter build ios --release --no-codesign
+          echo "✅ Flutter build complete"
+
+      - name: 📦 Archive
+        run: |
+          echo "📦 Creating archive..."
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_IDENTITY="${{ env.CODE_SIGN_IDENTITY }}" \
+            PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $HOME/Library/Keychains/build-temp.keychain-db" \
+            archive
+          echo "✅ Archive created successfully"
+
+      - name: 📱 Export IPA
+        run: |
+          echo "📱 Exporting IPA..."
+          xcodebuild -exportArchive \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -exportPath build/ios/ipa
+          echo "✅ IPA exported successfully"
+
+      - name: 🚀 Upload to App Store
+        run: |
+          echo "🚀 Uploading to App Store..."
+          IPA_FILE=$(find build/ios/ipa -name "*.ipa" | head -n1)
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_FILE" \
+            --username "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
+          echo "🎉 Upload successful! Your app is now processing in App Store Connect."
+
+      - name: 💾 Save Artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/ios/
+            ios/ExportOptions.plist
