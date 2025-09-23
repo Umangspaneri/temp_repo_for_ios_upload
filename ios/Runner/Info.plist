@@ -16,7 +16,6 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Rentpedia</string>
-
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
