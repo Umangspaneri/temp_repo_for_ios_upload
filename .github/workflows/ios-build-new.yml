@@ -239,6 +239,7 @@
 #             --username "${{ secrets.APPLE_ID }}" \
 #             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
 
+
 name: iOS Build & Upload
 
 on:
@@ -258,7 +259,7 @@ jobs:
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.1'
+          flutter-version: '3.24.3'
           channel: stable
           cache: true
 
