@@ -251,107 +251,104 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. Checkout source
+      # 1. Checkout
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. Setup Flutter
-      - name: Setup Flutter SDK
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.3'
-          channel: stable
+      # 2. Install dependencies
+      - name: Install Flutter & CocoaPods
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::DEP_INSTALL_ERROR at line $LINENO"; exit 1' ERR
+
+          flutter pub get --verbose
+          gem install cocoapods --user-install
+          export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
+          cd ios && pod install --repo-update --verbose && cd ..
+          echo "✅ DEP_INSTALL_SUCCESS"
 
       # 3. Select Xcode 16
       - name: Select Xcode 16
         run: |
+          set -euo pipefail
+          trap 'echo "::error::XCODE_SELECT_ERROR at line $LINENO"; exit 1' ERR
+
           X16=$(ls /Applications | grep '^Xcode_16' | head -n1)
-          if [ -z "$X16" ]; then
-            echo "::error::Xcode_16 not found"
-            exit 1
-          fi
+          [ -n "$X16" ] || { echo "::error::XCODE_NOT_FOUND"; exit 1; }
           sudo xcode-select -s /Applications/"$X16"/Contents/Developer
+          echo "✅ XCODE_SELECT_SUCCESS: $(xcodebuild -version | head -1)"
 
-      # 4. Confirm versions
-      - name: Confirm Xcode, Flutter & Dart versions
-        run: |
-          xcodebuild -version
-          flutter --version
-          dart --version
-
-      # 5. Install Dart & CocoaPods
-      - name: Install dependencies
-        run: |
-          flutter pub get --verbose
-          gem install cocoapods --user-install
-          export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          cd ios
-          pod install --repo-update --verbose
-          cd ..
-
-      # 6. Create temporary keychain & import P12
-      - name: Setup temporary keychain
+      # 4. Setup keychain & import cert
+      - name: Setup keychain & import P12
         env:
           CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
         run: |
-          KC=build-temp
-          security create-keychain -p "" "${KC}.keychain-db"
-          security set-keychain-settings -t 3600 -u "${KC}.keychain-db"
-          security unlock-keychain -p "" "${KC}.keychain-db"
+          set -euo pipefail
+          trap 'echo "::error::KEYCHAIN_IMPORT_ERROR at line $LINENO"; exit 1' ERR
+
+          KC=build-temp.keychain-db
+          security create-keychain -p "" "$KC"
+          security set-keychain-settings -t 3600 -u "$KC"
+          security unlock-keychain -p "" "$KC"
           security import certs/Certificates.p12 \
-            -k ~/Library/Keychains/"${KC}.keychain-db" \
+            -k ~/Library/Keychains/"$KC" \
             -P "$CERT_PASS" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
           security list-keychains -d user -s \
-            ~/Library/Keychains/"${KC}.keychain-db" \
+            ~/Library/Keychains/"$KC" \
             $(security list-keychains -d user)
+          echo "✅ KEYCHAIN_IMPORT_SUCCESS"
 
-      # 7. List & extract the Distribution identity
+      # 5. Grant codesign partition list
+      - name: Allow codesign access
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::PARTITION_LIST_ERROR at line $LINENO"; exit 1' ERR
+
+          security set-key-partition-list \
+            -S apple-tool:,codesign \
+            -s -k "" ~/Library/Keychains/build-temp.keychain-db
+          echo "✅ PARTITION_LIST_SUCCESS"
+
+      # 6. Extract distribution identity
       - name: Extract Distribution identity
         run: |
-          echo "🔑 Available code-signing identities:"
-          security find-identity -p codesigning -v \
-            ~/Library/Keychains/build-temp.keychain-db
+          set -euo pipefail
+          trap 'echo "::error::DIST_ID_EXTRACT_ERROR at line $LINENO"; exit 1' ERR
+
           DIST_ID=$(security find-identity -p codesigning -v \
             ~/Library/Keychains/build-temp.keychain-db \
             | grep 'iPhone Distribution:' \
             | head -n1 \
             | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/')
-          if [ -z "$DIST_ID" ]; then
-            echo "::error::No iPhone Distribution identity found"
-            exit 1
-          fi
+          [ -n "$DIST_ID" ] || { echo "::error::NO_DIST_ID"; exit 1; }
           echo "CODE_SIGN_IDENTITY=$DIST_ID" >> $GITHUB_ENV
+          echo "✅ DIST_ID_EXTRACT_SUCCESS: $DIST_ID"
 
-      # 8. Grant codesign partition list
-      - name: Allow codesign access
-        run: |
-          security set-key-partition-list \
-            -S apple-tool:,codesign \
-            -s -k "" ~/Library/Keychains/build-temp.keychain-db
-
-      # 9. Decode & register provisioning profile
+      # 7. Register provisioning profile
       - name: Register provisioning profile
         run: |
-          PROFILE_PATH=certs/Rentpedia_AppStore_2025.mobileprovision
-          PROFILE_PLIST=profile.plist
-          DEST="$HOME/Library/MobileDevice/Provisioning Profiles"
+          set -euo pipefail
+          trap 'echo "::error::PROFILE_REG_ERROR at line $LINENO"; exit 1' ERR
 
-          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
-          UUID=$(plutil -extract UUID raw "$PROFILE_PLIST")
-          if [ -z "$UUID" ]; then
-            echo "::error::Failed to extract UUID"
-            exit 1
-          fi
+          PROFILE=certs/Rentpedia_AppStore_2025.mobileprovision
+          security cms -D -i "$PROFILE" > profile.plist
+          UUID=$(plutil -extract UUID raw profile.plist)
+          [ -n "$UUID" ] || { echo "::error::NO_PROFILE_UUID"; exit 1; }
           echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
-          mkdir -p "$DEST"
-          cp "$PROFILE_PATH" "$DEST/${UUID}.mobileprovision"
-          echo "✅ Profile copied: $DEST/${UUID}.mobileprovision"
 
-      # 10. Create manual-sign ExportOptions.plist
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          echo "✅ PROFILE_REG_SUCCESS: $UUID"
+
+      # 8. Create manual‐sign ExportOptions.plist
       - name: Create ExportOptions.plist
         run: |
+          set -euo pipefail
+          trap 'echo "::error::EXPORT_OPTIONS_ERROR at line $LINENO"; exit 1' ERR
+
           cat > ios/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -361,31 +358,40 @@ jobs:
             <key>method</key><string>app-store</string>
             <key>signingStyle</key><string>manual</string>
             <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingCertificate</key>
+              <string>${{ env.CODE_SIGN_IDENTITY }}</string>
             <key>provisioningProfiles</key>
             <dict>
-              <!-- replace com.rentpedia with your actual bundle ID -->
               <key>com.rentpedia</key>
               <string>${{ env.PROFILE_UUID }}</string>
             </dict>
           </dict>
           </plist>
           EOF
+          echo "✅ EXPORT_OPTIONS_SUCCESS"
 
-      # 11. Flutter build (no codesign)
-      - name: Build iOS with Flutter
-        run: flutter build ios --release --no-codesign --verbose
+      # 9. Flutter build (no codesign)
+      - name: Flutter build (no codesign)
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::FLUTTER_BUILD_ERROR at line $LINENO"; exit 1' ERR
 
-      # 12. Archive with manual signing
-      - name: Archive app (manual signing)
+          flutter build ios --release --no-codesign --verbose
+          echo "✅ FLUTTER_BUILD_SUCCESS"
+
+      # 10. Archive with manual signing
+      - name: Archive with manual signing
         env:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
           CODE_SIGN_IDENTITY: ${{ env.CODE_SIGN_IDENTITY }}
           PROFILE_UUID: ${{ env.PROFILE_UUID }}
           OTHER_CODE_SIGN_FLAGS: "--keychain $HOME/Library/Keychains/build-temp.keychain-db"
         run: |
+          set -euo pipefail
+          trap 'echo "::error::ARCHIVE_ERROR at line $LINENO"; exit 1' ERR
+
           mkdir -p build/ios/archive
-          xcodebuild \
-            -workspace ios/Runner.xcworkspace \
+          xcodebuild -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
@@ -395,35 +401,34 @@ jobs:
             CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
             PROVISIONING_PROFILE="$PROFILE_UUID" \
             OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS"
+          echo "✅ ARCHIVE_SUCCESS"
 
-      # 13. Export .ipa
+      # 11. Export .ipa
       - name: Export .ipa
         run: |
+          set -euo pipefail
+          trap 'echo "::error::EXPORT_ARCHIVE_ERROR at line $LINENO"; exit 1' ERR
+
           mkdir -p build/ios/ipa
           xcodebuild -exportArchive \
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa
+          echo "✅ EXPORT_IPA_SUCCESS"
 
-      # 14. Rename IPA
-      - name: Rename IPA
-        run: mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
-
-      # 15. Upload artifact
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios-ipa
-          path: build/ios/ipa/Rentpedia.ipa
-
-      # 16. Upload to TestFlight
+      # 12. Upload to TestFlight
       - name: Upload to TestFlight
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
         run: |
+          set -euo pipefail
+          trap 'echo "::error::UPLOAD_ERROR at line $LINENO"; exit 1' ERR
+
           xcrun altool --upload-app \
             --type ios \
             --file build/ios/ipa/Rentpedia.ipa \
             --username "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}" \
             --verbose
+          echo "✅ UPLOAD_SUCCESS"
