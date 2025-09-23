@@ -238,6 +238,8 @@
 #             --file build/ios/ipa/Rentpedia.ipa \
 #             --username "${{ secrets.APPLE_ID }}" \
 #             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
+
+
 name: Build & Sign iOS App for App Store
 
 on:
@@ -251,23 +253,36 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. Checkout
+      # 1. Checkout source
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. Install dependencies
-      - name: Install Flutter & CocoaPods
+      # 2. Setup Flutter SDK
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.3'
+          channel: stable
+
+      # 3. Install Flutter & CocoaPods dependencies
+      - name: Install dependencies
         run: |
           set -euo pipefail
-          trap 'echo "::error::DEP_INSTALL_ERROR at line $LINENO"; exit 1' ERR
+          trap 'echo "::error::DEPENDENCY_INSTALL_ERROR at line $LINENO"; exit 1' ERR
 
+          # Dart packages
           flutter pub get --verbose
+
+          # CocoaPods
           gem install cocoapods --user-install
           export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          cd ios && pod install --repo-update --verbose && cd ..
-          echo "✅ DEP_INSTALL_SUCCESS"
+          cd ios
+          pod install --repo-update --verbose
+          cd ..
 
-      # 3. Select Xcode 16
+          echo "✅ DEPENDENCY_INSTALL_SUCCESS"
+
+      # 4. Select Xcode 16
       - name: Select Xcode 16
         run: |
           set -euo pipefail
@@ -276,9 +291,9 @@ jobs:
           X16=$(ls /Applications | grep '^Xcode_16' | head -n1)
           [ -n "$X16" ] || { echo "::error::XCODE_NOT_FOUND"; exit 1; }
           sudo xcode-select -s /Applications/"$X16"/Contents/Developer
-          echo "✅ XCODE_SELECT_SUCCESS: $(xcodebuild -version | head -1)"
+          echo "✅ XCODE_SELECT_SUCCESS"
 
-      # 4. Setup keychain & import cert
+      # 5. Setup temp keychain & import P12
       - name: Setup keychain & import P12
         env:
           CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
@@ -298,9 +313,10 @@ jobs:
           security list-keychains -d user -s \
             ~/Library/Keychains/"$KC" \
             $(security list-keychains -d user)
+
           echo "✅ KEYCHAIN_IMPORT_SUCCESS"
 
-      # 5. Grant codesign partition list
+      # 6. Grant codesign partition list
       - name: Allow codesign access
         run: |
           set -euo pipefail
@@ -309,9 +325,10 @@ jobs:
           security set-key-partition-list \
             -S apple-tool:,codesign \
             -s -k "" ~/Library/Keychains/build-temp.keychain-db
+
           echo "✅ PARTITION_LIST_SUCCESS"
 
-      # 6. Extract distribution identity
+      # 7. Extract Distribution identity
       - name: Extract Distribution identity
         run: |
           set -euo pipefail
@@ -326,7 +343,7 @@ jobs:
           echo "CODE_SIGN_IDENTITY=$DIST_ID" >> $GITHUB_ENV
           echo "✅ DIST_ID_EXTRACT_SUCCESS: $DIST_ID"
 
-      # 7. Register provisioning profile
+      # 8. Register provisioning profile
       - name: Register provisioning profile
         run: |
           set -euo pipefail
@@ -341,9 +358,10 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE" \
             "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+
           echo "✅ PROFILE_REG_SUCCESS: $UUID"
 
-      # 8. Create manual‐sign ExportOptions.plist
+      # 9. Create manual‐sign ExportOptions.plist
       - name: Create ExportOptions.plist
         run: |
           set -euo pipefail
@@ -359,7 +377,7 @@ jobs:
             <key>signingStyle</key><string>manual</string>
             <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
             <key>signingCertificate</key>
-              <string>${{ env.CODE_SIGN_IDENTITY }}</string>
+            <string>${{ env.CODE_SIGN_IDENTITY }}</string>
             <key>provisioningProfiles</key>
             <dict>
               <key>com.rentpedia</key>
@@ -368,9 +386,10 @@ jobs:
           </dict>
           </plist>
           EOF
+
           echo "✅ EXPORT_OPTIONS_SUCCESS"
 
-      # 9. Flutter build (no codesign)
+      # 10. Flutter build (no codesign)
       - name: Flutter build (no codesign)
         run: |
           set -euo pipefail
@@ -379,7 +398,7 @@ jobs:
           flutter build ios --release --no-codesign --verbose
           echo "✅ FLUTTER_BUILD_SUCCESS"
 
-      # 10. Archive with manual signing
+      # 11. Archive with manual signing
       - name: Archive with manual signing
         env:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
@@ -401,9 +420,10 @@ jobs:
             CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
             PROVISIONING_PROFILE="$PROFILE_UUID" \
             OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS"
+          
           echo "✅ ARCHIVE_SUCCESS"
 
-      # 11. Export .ipa
+      # 12. Export .ipa
       - name: Export .ipa
         run: |
           set -euo pipefail
@@ -414,9 +434,10 @@ jobs:
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa
+          
           echo "✅ EXPORT_IPA_SUCCESS"
 
-      # 12. Upload to TestFlight
+      # 13. Upload to TestFlight
       - name: Upload to TestFlight
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -431,4 +452,5 @@ jobs:
             --username "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}" \
             --verbose
+          
           echo "✅ UPLOAD_SUCCESS"
