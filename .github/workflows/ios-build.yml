@@ -223,3 +223,4 @@ jobs:
           echo "Size: $(ls -lh certs/Runner.ipa | awk '{print $5}')"
           echo "Apple ID: ${{ secrets.APPLE_ID }}"
           echo "Upload completed at: $(date)"
+          
