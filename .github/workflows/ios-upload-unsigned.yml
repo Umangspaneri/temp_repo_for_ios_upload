@@ -239,8 +239,7 @@
 #             --username "${{ secrets.APPLE_ID }}" \
 #             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
 
-
-name: Build & Sign iOS App for App Store
+name: iOS Build & Upload
 
 on:
   push:
@@ -250,275 +249,130 @@ on:
 jobs:
   build:
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     steps:
-      # 1. Checkout source
-      - name: Checkout code
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # 2. Setup Flutter SDK
-      - name: Setup Flutter SDK
+      - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.3'  # Fixed version number
+          flutter-version: '3.24.3'
           channel: stable
+          cache: true
 
-      # 3. Install Flutter & CocoaPods dependencies
-      - name: Install dependencies
+      - name: 📦 Dependencies
         run: |
-          set -euo pipefail
-          trap 'echo "::error::DEPENDENCY_INSTALL_ERROR at line $LINENO"; exit 1' ERR
+          echo "📦 Installing dependencies..."
+          flutter pub get
+          brew install cocoapods
+          cd ios && pod install && cd ..
+          echo "✅ Dependencies installed"
 
-          # Dart packages
-          flutter pub get --verbose
-
-          # CocoaPods
-          gem install cocoapods --user-install
-          export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          cd ios
-          pod install --repo-update --verbose
-          cd ..
-
-          echo "✅ DEPENDENCY_INSTALL_SUCCESS"
-
-      # 4. Select Xcode 16
-      - name: Select Xcode 16
+      - name: 🔧 Setup Xcode
         run: |
-          set -euo pipefail
-          trap 'echo "::error::XCODE_SELECT_ERROR at line $LINENO"; exit 1' ERR
+          echo "🔧 Setting up Xcode..."
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          echo "✅ Xcode 16.1 selected"
 
-          X16=$(ls /Applications | grep '^Xcode_16' | head -n1)
-          [ -n "$X16" ] || { echo "::error::XCODE_NOT_FOUND"; exit 1; }
-          sudo xcode-select -s /Applications/"$X16"/Contents/Developer
-          echo "✅ XCODE_SELECT_SUCCESS using $X16"
-
-      # 5. Setup temp keychain & import P12
-      - name: Setup keychain & import P12
-        env:
-          CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
+      - name: 🔐 Setup Keychain
         run: |
-          set -euo pipefail
-          trap 'echo "::error::KEYCHAIN_IMPORT_ERROR at line $LINENO"; exit 1' ERR
+          echo "🔐 Setting up keychain..."
+          security create-keychain -p "" build-temp.keychain-db
+          security unlock-keychain -p "" build-temp.keychain-db
+          security import certs/Certificates.p12 -k ~/Library/Keychains/build-temp.keychain-db -P "${{ secrets.IOS_CERT_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple-tool:codesign: -s -k "" ~/Library/Keychains/build-temp.keychain-db
+          echo "✅ Keychain setup complete"
 
-          KC=build-temp.keychain-db
-          security create-keychain -p "" "$KC"
-          security set-keychain-settings -t 3600 -u "$KC"
-          security unlock-keychain -p "" "$KC"
-          security import certs/Certificates.p12 \
-            -k ~/Library/Keychains/"$KC" \
-            -P "$CERT_PASS" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security list-keychains -d user -s \
-            ~/Library/Keychains/"$KC" \
-            $(security list-keychains -d user)
-
-          echo "✅ KEYCHAIN_IMPORT_SUCCESS"
-
-      # 6. Grant codesign partition list
-      - name: Allow codesign access
+      - name: 📋 Get Certificate
         run: |
-          set -euo pipefail
-          trap 'echo "::error::PARTITION_LIST_ERROR at line $LINENO"; exit 1' ERR
+          echo "📋 Finding certificate..."
+          CERT=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db | grep -E "(Distribution|iPhone)" | head -n1 | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/')
+          echo "CODE_SIGN_IDENTITY=$CERT" >> $GITHUB_ENV
+          echo "✅ Certificate found: $CERT"
 
-          security set-key-partition-list \
-            -S apple-tool:,apple-tool:codesign: \
-            -s -k "" ~/Library/Keychains/build-temp.keychain-db
-
-          echo "✅ PARTITION_LIST_SUCCESS"
-
-      # 7. Debug and extract Distribution identity - FIXED VERSION
-      - name: Extract Distribution identity
+      - name: 📱 Setup Provisioning
         run: |
-          set -euo pipefail
-          trap 'echo "::error::DIST_ID_EXTRACT_ERROR at line $LINENO"; exit 1' ERR
-
-          echo "=== All available identities ==="
-          security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db
-
-          # Try multiple patterns to find distribution certificate
-          DIST_ID=""
-          
-          # Pattern 1: Standard iPhone Distribution format
-          DIST_ID=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db \
-            | grep 'iPhone Distribution:' | head -n1 \
-            | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
-          
-          # Pattern 2: Distribution format (like your provisioning profile)
-          if [ -z "$DIST_ID" ]; then
-            DIST_ID=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db \
-              | grep 'Distribution' | head -n1 \
-              | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
-          fi
-          
-          # Pattern 3: Apple Distribution format
-          if [ -z "$DIST_ID" ]; then
-            DIST_ID=$(security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db \
-              | grep 'Apple Distribution' | head -n1 \
-              | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/' || true)
-          fi
-
-          [ -n "$DIST_ID" ] || { 
-            echo "::error::NO_DIST_ID_FOUND - Available certificates:"
-            security find-identity -p codesigning -v ~/Library/Keychains/build-temp.keychain-db
-            exit 1
-          }
-          
-          echo "CODE_SIGN_IDENTITY=$DIST_ID" >> $GITHUB_ENV
-          echo "✅ DIST_ID_EXTRACT_SUCCESS: $DIST_ID"
-
-      # 8. Register provisioning profile
-      - name: Register provisioning profile
-        run: |
-          set -euo pipefail
-          trap 'echo "::error::PROFILE_REG_ERROR at line $LINENO"; exit 1' ERR
-
-          PROFILE=certs/Rentpedia_AppStore_2025.mobileprovision
-          security cms -D -i "$PROFILE" > profile.plist
+          echo "📱 Setting up provisioning profile..."
+          security cms -D -i certs/Rentpedia_AppStore_2025.mobileprovision > profile.plist
           UUID=$(plutil -extract UUID raw profile.plist)
-          [ -n "$UUID" ] || { echo "::error::NO_PROFILE_UUID"; exit 1; }
-          echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
-
-          # Extract bundle identifier from profile
           BUNDLE_ID=$(plutil -extract Entitlements.application-identifier raw profile.plist | sed 's/^[^.]*\.//')
-          echo "BUNDLE_IDENTIFIER=$BUNDLE_ID" >> $GITHUB_ENV
-
+          echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+          echo "BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_ENV
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$PROFILE" \
-            "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          cp certs/Rentpedia_AppStore_2025.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
+          echo "✅ Provisioning profile setup complete"
 
-          echo "✅ PROFILE_REG_SUCCESS: $UUID"
-          echo "✅ BUNDLE_ID_EXTRACTED: $BUNDLE_ID"
-
-      # 9. Create manual‐sign ExportOptions.plist - FIXED VERSION
-      - name: Create ExportOptions.plist
+      - name: 📝 Create Export Options
         run: |
-          set -euo pipefail
-          trap 'echo "::error::EXPORT_OPTIONS_ERROR at line $LINENO"; exit 1' ERR
-
+          echo "📝 Creating export options..."
           cat > ios/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>method</key><string>app-store</string>
             <key>signingStyle</key><string>manual</string>
             <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
-            <key>signingCertificate</key>
-            <string>\${{ env.CODE_SIGN_IDENTITY }}</string>
+            <key>signingCertificate</key><string>${{ env.CODE_SIGN_IDENTITY }}</string>
             <key>provisioningProfiles</key>
             <dict>
-              <key>\${{ env.BUNDLE_IDENTIFIER }}</key>
-              <string>\${{ env.PROFILE_UUID }}</string>
+              <key>${{ env.BUNDLE_ID }}</key>
+              <string>${{ env.PROFILE_UUID }}</string>
             </dict>
-            <key>uploadBitcode</key><false/>
-            <key>uploadSymbols</key><true/>
-            <key>compileBitcode</key><false/>
           </dict>
           </plist>
           EOF
+          echo "✅ Export options created"
 
-          echo "✅ EXPORT_OPTIONS_SUCCESS"
-          echo "Using Bundle ID: ${{ env.BUNDLE_IDENTIFIER }}"
-
-      # 10. Flutter build (no codesign)
-      - name: Flutter build (no codesign)
+      - name: 🔨 Flutter Build
         run: |
-          set -euo pipefail
-          trap 'echo "::error::FLUTTER_BUILD_ERROR at line $LINENO"; exit 1' ERR
+          echo "🔨 Building Flutter app..."
+          flutter build ios --release --no-codesign
+          echo "✅ Flutter build complete"
 
-          flutter build ios --release --no-codesign --verbose
-          echo "✅ FLUTTER_BUILD_SUCCESS"
-
-      # 11. Archive with manual signing - IMPROVED VERSION
-      - name: Archive with manual signing
-        env:
-          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
-          CODE_SIGN_IDENTITY: ${{ env.CODE_SIGN_IDENTITY }}
-          PROFILE_UUID: ${{ env.PROFILE_UUID }}
-          OTHER_CODE_SIGN_FLAGS: "--keychain $HOME/Library/Keychains/build-temp.keychain-db"
+      - name: 📦 Archive
         run: |
-          set -euo pipefail
-          trap 'echo "::error::ARCHIVE_ERROR at line $LINENO"; exit 1' ERR
-
-          echo "Using Certificate: $CODE_SIGN_IDENTITY"
-          echo "Using Profile UUID: $PROFILE_UUID"
-          echo "Using Team ID: $DEVELOPMENT_TEAM"
-
-          mkdir -p build/ios/archive
+          echo "📦 Creating archive..."
           xcodebuild -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
-            -destination "generic/platform=iOS" \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_IDENTITY="${{ env.CODE_SIGN_IDENTITY }}" \
             PROVISIONING_PROFILE_SPECIFIER="Rentpedia_AppStore_2025" \
-            OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS" \
-            -allowProvisioningUpdates \
+            OTHER_CODE_SIGN_FLAGS="--keychain $HOME/Library/Keychains/build-temp.keychain-db" \
             archive
-          
-          echo "✅ ARCHIVE_SUCCESS"
+          echo "✅ Archive created successfully"
 
-      # 12. Export .ipa
-      - name: Export .ipa
+      - name: 📱 Export IPA
         run: |
-          set -euo pipefail
-          trap 'echo "::error::EXPORT_ARCHIVE_ERROR at line $LINENO"; exit 1' ERR
-
-          mkdir -p build/ios/ipa
-          
-          echo "=== ExportOptions.plist content ==="
-          cat ios/ExportOptions.plist
-          
+          echo "📱 Exporting IPA..."
           xcodebuild -exportArchive \
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportOptionsPlist ios/ExportOptions.plist \
-            -exportPath build/ios/ipa \
-            -allowProvisioningUpdates
-          
-          echo "✅ EXPORT_IPA_SUCCESS"
-          
-          # List generated files
-          echo "=== Generated files ==="
-          ls -la build/ios/ipa/
+            -exportPath build/ios/ipa
+          echo "✅ IPA exported successfully"
 
-      # 13. Upload to TestFlight
-      - name: Upload to TestFlight
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+      - name: 🚀 Upload to App Store
         run: |
-          set -euo pipefail
-          trap 'echo "::error::UPLOAD_ERROR at line $LINENO"; exit 1' ERR
-
-          # Find the .ipa file (it might not be named exactly "Rentpedia.ipa")
-          IPA_FILE=$(find build/ios/ipa -name "*.ipa" -type f | head -n1)
-          [ -n "$IPA_FILE" ] || { echo "::error::NO_IPA_FOUND"; exit 1; }
-          
-          echo "Uploading: $IPA_FILE"
-
+          echo "🚀 Uploading to App Store..."
+          IPA_FILE=$(find build/ios/ipa -name "*.ipa" | head -n1)
           xcrun altool --upload-app \
             --type ios \
             --file "$IPA_FILE" \
-            --username "$APPLE_ID" \
-            --password "$APP_SPECIFIC_PASSWORD" \
-            --verbose
-          
-          echo "✅ UPLOAD_SUCCESS"
+            --username "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
+          echo "🎉 Upload successful! Your app is now processing in App Store Connect."
 
-      # 14. Archive artifacts on failure
-      - name: Archive build artifacts
+      - name: 💾 Save Artifacts (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
+          name: build-logs
           path: |
             build/ios/
             ios/ExportOptions.plist
-            profile.plist
-          retention-days: 5
