@@ -73,3 +73,40 @@ jobs:
           path: |
             build/ios/archive/Runner.xcarchive
             ios/ExportOptions.plist
+
+      - name: 🔐 Import certs and profile
+        run: |
+          security create-keychain -p "" build.keychain
+          security unlock-keychain -p "" build.keychain
+
+          security import certs/Certificates.p12 \
+            -k ~/Library/Keychains/build.keychain \
+            -P "${{ secrets.IOS_CERT_PASSWORD }}" \
+            -T /usr/bin/codesign -T /usr/bin/security
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp certs/Rentpedia_AppStore_2025.mobileprovision \
+            ~/Library/MobileDevice/Provisioning\ Profiles/
+
+          security set-key-partition-list \
+            -S apple-tool:,codesign \
+            -s -k "" ~/Library/Keychains/build.keychain
+          echo "✅ Certs and profile imported"
+
+      - name: 📦 Export signed IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -exportPath build/ios/exported \
+            OTHER_CODE_SIGN_FLAGS="--keychain ~/Library/Keychains/build.keychain"
+          echo "✅ IPA exported"
+
+      - name: 🚀 Upload to App Store
+        run: |
+          xcrun altool --upload-app \
+            --type ios \
+            --file build/ios/exported/Runner.ipa \
+            --username "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
+          echo "✅ Upload complete"
