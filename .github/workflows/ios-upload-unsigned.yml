@@ -239,7 +239,6 @@
 #             --username "${{ secrets.APPLE_ID }}" \
 #             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
 
-
 name: Build & Sign iOS App for App Store
 
 on:
@@ -325,17 +324,19 @@ jobs:
 
           # Decode the profile to extract UUID
           security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
-
           UUID=$(plutil -extract UUID raw "$PROFILE_PLIST")
           if [ -z "$UUID" ]; then
             echo "::error::Failed to extract UUID from $PROFILE_PLIST"
             exit 1
           fi
 
+          # Save for manual signing step
+          echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+
           # Ensure the destination directory exists
           mkdir -p "$DEST_DIR"
 
-          # Copy using $HOME, not ~
+          # Copy into the provisioning profiles folder
           cp "$PROFILE_PATH" "$DEST_DIR/${UUID}.mobileprovision"
 
           echo "✅ Registered provisioning profile at: $DEST_DIR/${UUID}.mobileprovision"
@@ -360,10 +361,11 @@ jobs:
       - name: Build iOS with Flutter (no codesign)
         run: flutter build ios --release --no-codesign --verbose
 
-      # 11. Archive with xcodebuild
-      - name: Archive app
+      # 11. Archive with manual signing
+      - name: Archive app (manual signing)
         env:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          PROFILE_UUID: ${{ env.PROFILE_UUID }}
           OTHER_CODE_SIGN_FLAGS: "--keychain $HOME/Library/Keychains/build-temp.keychain-db"
         run: |
           mkdir -p build/ios/archive
@@ -373,9 +375,10 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/ios/archive/Runner.xcarchive \
-            -allowProvisioningUpdates \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE="$PROFILE_UUID" \
             OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS"
 
       # 12. Export .ipa
@@ -389,8 +392,7 @@ jobs:
 
       # 13. Rename IPA to match your app name
       - name: Rename IPA
-        run: |
-          mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
+        run: mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
 
       # 14. Upload artifacts for diagnostics
       - uses: actions/upload-artifact@v4
@@ -409,4 +411,4 @@ jobs:
             --file build/ios/ipa/Rentpedia.ipa \
             --username "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}" \
-            --verbose
+            --verbose 
