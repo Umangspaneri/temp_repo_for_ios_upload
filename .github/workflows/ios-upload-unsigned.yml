@@ -238,7 +238,6 @@
 #             --file build/ios/ipa/Rentpedia.ipa \
 #             --username "${{ secrets.APPLE_ID }}" \
 #             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
-
 name: Build & Sign iOS App for App Store
 
 on:
@@ -252,7 +251,6 @@ jobs:
     timeout-minutes: 120
 
     steps:
-
       # 1. Checkout source
       - name: Checkout code
         uses: actions/checkout@v3
@@ -281,8 +279,8 @@ jobs:
           flutter --version
           dart --version
 
-      # 5. Install Dart & CocoaPods dependencies
-      - name: Install Dart & CocoaPods
+      # 5. Install Dart & CocoaPods
+      - name: Install dependencies
         run: |
           flutter pub get --verbose
           gem install cocoapods --user-install
@@ -291,7 +289,7 @@ jobs:
           pod install --repo-update --verbose
           cd ..
 
-      # 6. Create and configure temporary keychain
+      # 6. Create temporary keychain & import P12
       - name: Setup temporary keychain
         env:
           CERT_PASS: ${{ secrets.IOS_CERT_PASSWORD }}
@@ -305,43 +303,53 @@ jobs:
             -P "$CERT_PASS" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
-          security list-keychains -d user -s ~/Library/Keychains/"${KC}.keychain-db" \
+          security list-keychains -d user -s \
+            ~/Library/Keychains/"${KC}.keychain-db" \
             $(security list-keychains -d user)
 
-      # 7. Grant codesign partition list to the keychain
+      # 7. List & extract the Distribution identity
+      - name: Extract Distribution identity
+        run: |
+          echo "🔑 Available code-signing identities:"
+          security find-identity -p codesigning -v \
+            ~/Library/Keychains/build-temp.keychain-db
+          DIST_ID=$(security find-identity -p codesigning -v \
+            ~/Library/Keychains/build-temp.keychain-db \
+            | grep 'iPhone Distribution:' \
+            | head -n1 \
+            | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ \"(.+)\".*$/\1/')
+          if [ -z "$DIST_ID" ]; then
+            echo "::error::No iPhone Distribution identity found"
+            exit 1
+          fi
+          echo "CODE_SIGN_IDENTITY=$DIST_ID" >> $GITHUB_ENV
+
+      # 8. Grant codesign partition list
       - name: Allow codesign access
         run: |
           security set-key-partition-list \
             -S apple-tool:,codesign \
             -s -k "" ~/Library/Keychains/build-temp.keychain-db
 
-      # 8. Decode & install provisioning profile
+      # 9. Decode & register provisioning profile
       - name: Register provisioning profile
         run: |
           PROFILE_PATH=certs/Rentpedia_AppStore_2025.mobileprovision
           PROFILE_PLIST=profile.plist
-          DEST_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          DEST="$HOME/Library/MobileDevice/Provisioning Profiles"
 
-          # Decode the profile to extract UUID
           security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
           UUID=$(plutil -extract UUID raw "$PROFILE_PLIST")
           if [ -z "$UUID" ]; then
-            echo "::error::Failed to extract UUID from $PROFILE_PLIST"
+            echo "::error::Failed to extract UUID"
             exit 1
           fi
-
-          # Save for manual signing step
           echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+          mkdir -p "$DEST"
+          cp "$PROFILE_PATH" "$DEST/${UUID}.mobileprovision"
+          echo "✅ Profile copied: $DEST/${UUID}.mobileprovision"
 
-          # Ensure the destination directory exists
-          mkdir -p "$DEST_DIR"
-
-          # Copy into the provisioning profiles folder
-          cp "$PROFILE_PATH" "$DEST_DIR/${UUID}.mobileprovision"
-
-          echo "✅ Registered provisioning profile at: $DEST_DIR/${UUID}.mobileprovision"
-
-      # 9. Prepare ExportOptions.plist for automatic signing
+      # 10. Create manual-sign ExportOptions.plist
       - name: Create ExportOptions.plist
         run: |
           cat > ios/ExportOptions.plist <<EOF
@@ -351,20 +359,27 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>method</key><string>app-store</string>
-            <key>signingStyle</key><string>automatic</string>
+            <key>signingStyle</key><string>manual</string>
             <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <!-- replace com.rentpedia with your actual bundle ID -->
+              <key>com.rentpedia</key>
+              <string>${{ env.PROFILE_UUID }}</string>
+            </dict>
           </dict>
           </plist>
           EOF
 
-      # 10. Flutter build (no codesign)
-      - name: Build iOS with Flutter (no codesign)
+      # 11. Flutter build (no codesign)
+      - name: Build iOS with Flutter
         run: flutter build ios --release --no-codesign --verbose
 
-      # 11. Archive with manual signing
+      # 12. Archive with manual signing
       - name: Archive app (manual signing)
         env:
           DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          CODE_SIGN_IDENTITY: ${{ env.CODE_SIGN_IDENTITY }}
           PROFILE_UUID: ${{ env.PROFILE_UUID }}
           OTHER_CODE_SIGN_FLAGS: "--keychain $HOME/Library/Keychains/build-temp.keychain-db"
         run: |
@@ -377,11 +392,11 @@ jobs:
             -archivePath build/ios/archive/Runner.xcarchive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
             PROVISIONING_PROFILE="$PROFILE_UUID" \
             OTHER_CODE_SIGN_FLAGS="$OTHER_CODE_SIGN_FLAGS"
 
-      # 12. Export .ipa
+      # 13. Export .ipa
       - name: Export .ipa
         run: |
           mkdir -p build/ios/ipa
@@ -390,17 +405,17 @@ jobs:
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa
 
-      # 13. Rename IPA to match your app name
+      # 14. Rename IPA
       - name: Rename IPA
         run: mv build/ios/ipa/Runner.ipa build/ios/ipa/Rentpedia.ipa
 
-      # 14. Upload artifacts for diagnostics
+      # 15. Upload artifact
       - uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
           path: build/ios/ipa/Rentpedia.ipa
 
-      # 15. Upload to TestFlight
+      # 16. Upload to TestFlight
       - name: Upload to TestFlight
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -411,4 +426,4 @@ jobs:
             --file build/ios/ipa/Rentpedia.ipa \
             --username "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APP_SPECIFIC_PASSWORD }}" \
-            --verbose 
+            --verbose
