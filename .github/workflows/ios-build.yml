@@ -11,43 +11,46 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # 1. Checkout your code
-      - name: Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # 2. Set up Flutter
-      - name: Setup Flutter
+      - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.35.3'
           channel: stable
 
-      # 3. Install CocoaPods
-      - name: Install CocoaPods
+      - name: 📦 Install CocoaPods
         run: |
           gem install cocoapods --user-install
           export PATH="$HOME/.gem/ruby/3.0.0/bin:$PATH"
-          cd ios && pod install --repo-update && cd ..
+          echo "✅ CocoaPods installed"
 
-      # 4. Build iOS without signing
-      - name: Flutter build (no codesign)
-        run: flutter build ios --release --no-codesign
+      - name: 🔨 Flutter build (no codesign)
+        run: |
+          flutter build ios --release --no-codesign
+          echo "✅ Flutter build complete"
 
-      # 5. Archive unsigned .xcarchive
-      - name: Archive unsigned
+      - name: 📦 Install Pods
+        run: |
+          cd ios
+          pod install --repo-update
+          cd ..
+          echo "✅ Pods installed"
+
+      - name: 📦 Archive unsigned
         run: |
           mkdir -p build/ios/archive
-          xcodebuild \
-            -workspace ios/Runner.xcworkspace \
+          xcodebuild -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             -archivePath build/ios/archive/Runner.xcarchive \
             archive
+          echo "✅ Archive created"
 
-      # 6. Create minimal ExportOptions.plist
-      - name: Create ExportOptions.plist
+      - name: 📝 Create ExportOptions.plist
         run: |
           cat > ios/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -61,9 +64,10 @@ jobs:
           </dict>
           </plist>
           EOF
+          echo "✅ ExportOptions.plist created"
 
-      # 7. Upload both as artifacts
-      - uses: actions/upload-artifact@v4
+      - name: 💾 Upload unsigned archive
+        uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned-archive
           path: |
