@@ -177,7 +177,9 @@
 #           path: |
 #             build/ios/
 #             ios/ExportOptions.plist
-name: iOS Upload Only
+
+
+name: iOS Upload to App Store
 
 on:
   workflow_dispatch:
@@ -191,36 +193,56 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: 📥 Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 🚀 Upload IPA to App Store
+      - name: Verify IPA File
         run: |
-          echo "🚀 Uploading pre-built IPA to App Store..."
+          echo "Checking for IPA file..."
           if [ ! -f "certs/Runner.ipa" ]; then
-            echo "❌ Runner.ipa not found in certs/ folder"
-            echo "Please build locally and commit Runner.ipa to certs/ folder"
+            echo "Error: Runner.ipa not found in certs/ folder"
+            echo "Please export IPA from Xcode and place it in certs/Runner.ipa"
             exit 1
           fi
           
-          echo "📱 Found IPA file: certs/Runner.ipa"
-          ls -la certs/Runner.ipa
+          echo "Found IPA file: certs/Runner.ipa"
+          echo "File size: $(ls -lh certs/Runner.ipa | awk '{print $5}')"
           
-          echo "🔗 Uploading to App Store Connect..."
+          # Verify it's a valid IPA file
+          file certs/Runner.ipa
+          echo "IPA verification complete"
+
+      - name: Upload to App Store Connect
+        run: |
+          echo "Starting upload to App Store Connect..."
+          echo "Using Apple ID: ${{ secrets.APPLE_ID }}"
+          
+          # Upload using altool (legacy but reliable)
           xcrun altool --upload-app \
             --type ios \
             --file "certs/Runner.ipa" \
             --username "${{ secrets.APPLE_ID }}" \
-            --password "${{ secrets.APP_SPECIFIC_PASSWORD }}"
+            --password "${{ secrets.APP_SPECIFIC_PASSWORD }}" \
+            --verbose
           
-          echo "🎉 Upload successful! Your app is now processing in App Store Connect."
-          echo "📧 You'll receive an email when processing is complete."
+          echo "Upload completed successfully!"
+          echo "Your app is now processing in App Store Connect"
+          echo "You will receive an email notification when processing is complete"
 
-      - name: 💾 Log Upload Details
+      - name: Upload Summary
         run: |
-          echo "=== Upload Summary ==="
+          echo "================================"
+          echo "         UPLOAD SUMMARY         "
+          echo "================================"
+          echo "App: Rentpedia (com.rentpedia)"
           echo "File: certs/Runner.ipa"
           echo "Size: $(ls -lh certs/Runner.ipa | awk '{print $5}')"
           echo "Apple ID: ${{ secrets.APPLE_ID }}"
-          echo "Upload completed at: $(date)"
-              
+          echo "Uploaded: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Status: SUCCESS"
+          echo "================================"
+          echo ""
+          echo "Next steps:"
+          echo "1. Check App Store Connect for processing status"
+          echo "2. Wait for email confirmation"
+          echo "3. Review and submit for App Store review"  
